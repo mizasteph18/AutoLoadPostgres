@@ -11,7 +11,6 @@ import shutil
 import time
 import sys
 import atexit
-import requests
 from pathlib import Path
 from datetime import datetime
 from psycopg2 import sql, pool
@@ -26,7 +25,12 @@ PROGRESS_FILE = "processing_progress.json"
 GLOBAL_CONFIG_FILE = "global_loader_config.yaml"
 RESERVED_COLUMNS = {"loaded_timestamp", "source_filename", "content_hash", "operation"}
 HASH_EXCLUDE_COLS = RESERVED_COLUMNS
-DUPLICATES_DIR = "duplicates"
+DUPLICATES_ROOT_DIR = "duplicates"
+DUPLICATES_TO_PROCESS_DIR = os.path.join(DUPLICATES_ROOT_DIR, "to_process")
+DUPLICATES_PROCESSED_DIR = os.path.join(DUPLICATES_ROOT_DIR, "processed")
+FORMAT_CONFLICT_DIR = "format_conflict"
+FORMAT_CONFLICT_TO_PROCESS_DIR = os.path.join(FORMAT_CONFLICT_DIR, "to_process")
+FORMAT_CONFLICT_PROCESSED_DIR = os.path.join(FORMAT_CONFLICT_DIR, "processed")
 SYSTEM_COLUMNS_ORDER = ["loaded_timestamp", "source_filename", "content_hash", "operation"]
 LOCK_FILE = "loader.lock"  # Lock file for preventing concurrent runs
 
@@ -44,6 +48,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProcessingConfig:
     """Configuration class for processing parameters."""
+    dbname: str = "your_database_name"
+    user: str = "your_username"
+    password: str = "your_password"
+    host: str = "localhost"
+    port: int = 5432
     batch_size: int = DEFAULT_BATCH_SIZE
     max_connections: int = 5
     min_connections: int = 1
@@ -52,8 +61,18 @@ class ProcessingConfig:
     enable_data_validation: bool = True
     timestamp_tolerance_seconds: float = 1.0
     global_hash_exclude_columns: List[str] = field(default_factory=list)
-    teams_webhook: str = ""  # Teams webhook URL
     lock_timeout: int = 3600  # Lock timeout in seconds (1 hour)
+    auto_add_columns: bool = True  # Automatically add configured columns to database
+    
+    def get_db_config(self) -> Dict[str, Any]:
+        """Return database configuration as a dictionary."""
+        return {
+            "dbname": self.dbname,
+            "user": self.user,
+            "password": self.password,
+            "host": self.host,
+            "port": self.port
+        }
     
 @dataclass
 class FileProcessingRule:
@@ -67,6 +86,7 @@ class FileProcessingRule:
     mode: Optional[str] = None
     date_from_filename_col_name: Optional[str] = None
     hash_exclude_columns: List[str] = field(default_factory=list)
+    search_subdirectories: bool = True  # New option to control recursive search
     _compiled_pattern: Any = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -110,9 +130,10 @@ class FileContext:
     date_from_filename_col_name: Optional[str]
     hash_exclude_columns: List[str]
     is_duplicate: bool = False
+    is_format_conflict: bool = False  # New flag for format conflict files
 
 class DatabaseManager:
-    """Handles database connections and operations."""
+    """Handles database connections and operations with automatic table creation."""
     
     def __init__(self, db_config: Dict[str, Any], config: ProcessingConfig):
         self.db_config = db_config
@@ -157,6 +178,82 @@ class DatabaseManager:
             logger.error(f"Database connection test failed: {e}")
             return False
 
+    def table_exists(self, table_name: str) -> bool:
+        """Check if a table exists in the database."""
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_name = %s
+                        );
+                    """, (table_name,))
+                    return cursor.fetchone()[0]
+        except Exception as e:
+            logger.error(f"Error checking table existence: {e}")
+            return False
+
+    def create_table_if_not_exists(self, table_name: str, mapping: pd.DataFrame) -> bool:
+        """
+        Create table based on mapping file if it doesn't exist.
+        
+        Args:
+            table_name: Name of the table to create
+            mapping: DataFrame with column definitions
+        
+        Returns:
+            bool: True if table exists or was created successfully
+        """
+        try:
+            # Check if table already exists
+            if self.table_exists(table_name):
+                logger.info(f"Table {table_name} already exists")
+                return True
+            
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Create new table based on mapping
+                    columns_to_create = []
+                    
+                    # Process file columns with LoadFlag='Y'
+                    file_columns = mapping[
+                        (mapping['data_source'] == 'file') & 
+                        (mapping['LoadFlag'] == 'Y')
+                    ]
+                    
+                    for _, row in file_columns.iterrows():
+                        col_def = f"{row['TargetColumn']} {row['DataType']}"
+                        columns_to_create.append(col_def)
+                    
+                    # Add system columns
+                    system_columns = [
+                        ("loaded_timestamp", "TIMESTAMP"),
+                        ("source_filename", "TEXT"), 
+                        ("content_hash", "TEXT"),
+                        ("operation", "TEXT")
+                    ]
+                    
+                    for col_name, col_type in system_columns:
+                        columns_to_create.append(f"{col_name} {col_type}")
+                    
+                    if columns_to_create:
+                        create_query = sql.SQL("CREATE TABLE {} ({})").format(
+                            sql.Identifier(table_name),
+                            sql.SQL(", ".join(columns_to_create))
+                        )
+                        cursor.execute(create_query)
+                        conn.commit()
+                        logger.info(f"Created table {table_name} with {len(columns_to_create)} columns")
+                        return True
+                    else:
+                        logger.error(f"No columns configured for loading in table {table_name}")
+                        return False
+                        
+        except Exception as e:
+            logger.error(f"Failed to create table {table_name}: {e}")
+            return False
+
     def get_latest_timestamp_for_filename(self, target_table: str, source_filename: str) -> Optional[datetime]:
         try:
             with self.get_connection() as conn:
@@ -169,7 +266,7 @@ class DatabaseManager:
                     cursor.execute(query, (source_filename,))
                     return cursor.fetchone()[0]
         except psycopg2.errors.UndefinedTable:
-            return None
+            return None  # Table doesn't exist yet (normal for first run)
         except Exception as e:
             logger.error(f"Error getting latest timestamp: {e}")
             raise
@@ -181,7 +278,7 @@ class DatabaseManager:
                 cursor.execute(query, (source_filename,))
                 return cursor.rowcount
         except psycopg2.errors.UndefinedTable:
-            return 0
+            return 0  # Table doesn't exist yet (normal for first run)
         except Exception as e:
             logger.error(f"Error deleting records: {e}")
             raise
@@ -203,7 +300,7 @@ class DatabaseManager:
                     ))
                     return cursor.fetchone() is not None
         except psycopg2.errors.UndefinedTable:
-            return False
+            return False  # Table doesn't exist yet (normal for first run)
         except Exception as e:
             logger.error(f"File existence check failed: {e}")
             return False
@@ -218,9 +315,63 @@ class DatabaseManager:
                     """).format(sql.Identifier(target_table))
                     cursor.execute(query, (source_filename,))
                     return {row[0] for row in cursor.fetchall()}
+        except psycopg2.errors.UndefinedTable:
+            return set()  # Table doesn't exist yet (normal for first run)
         except Exception as e:
             logger.error(f"Failed to get existing hashes: {e}")
             return set()
+
+    def column_exists(self, table_name: str, column_name: str) -> bool:
+        """Check if a column exists in the specified table."""
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    query = sql.SQL("""
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = %s AND column_name = %s
+                    """)
+                    cursor.execute(query, (table_name, column_name))
+                    return cursor.fetchone() is not None
+        except Exception as e:
+            logger.error(f"Error checking column existence: {e}")
+            return False
+
+    def alter_table_add_columns(self, table_name: str, new_columns: List[Dict[str, str]]) -> bool:
+        """
+        Alter table to add new columns based on mapping configuration.
+        
+        Args:
+            table_name: Name of the table to alter
+            new_columns: List of dictionaries with column information
+                        [{'TargetColumn': 'col_name', 'DataType': 'TEXT'}, ...]
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    for col_info in new_columns:
+                        column_name = col_info['TargetColumn']
+                        data_type = col_info['DataType']
+                        
+                        # Check if column already exists
+                        if not self.column_exists(table_name, column_name):
+                            # Column doesn't exist, add it
+                            alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
+                                sql.Identifier(table_name),
+                                sql.Identifier(column_name),
+                                sql.SQL(data_type)
+                            )
+                            cursor.execute(alter_query)
+                            logger.info(f"Added column {column_name} to table {table_name}")
+                    
+                    conn.commit()
+                    return True
+        except Exception as e:
+            logger.error(f"Failed to alter table {table_name}: {e}")
+            return False
 
 class DataValidator:
     """Handles data validation and quality checks."""
@@ -277,15 +428,15 @@ class DataValidator:
         
         return True, errors
 
-class ProgressTracker:
-    """Tracks processing progress for resume capability with modification times."""
+class HybridProgressTracker:
+    """Tracks processing progress for resume capability with hybrid timestamp/hash checking."""
     
     def __init__(self, progress_file: str = PROGRESS_FILE):
         self.progress_file = progress_file
         self.processed_files = self._load_progress()
     
     def _load_progress(self) -> dict:
-        """Load progress as {filepath: last_processed_mod_time}"""
+        """Load progress as {tracking_key: processing_info}"""
         if os.path.exists(self.progress_file):
             try:
                 with open(self.progress_file, 'r') as f:
@@ -297,28 +448,104 @@ class ProgressTracker:
     def save_progress(self) -> None:
         try:
             with open(self.progress_file, 'w') as f:
-                json.dump(self.processed_files, f)
+                json.dump(self.processed_files, f, indent=2)
         except Exception as e:
-                logger.error(f"Could not save progress: {e}")
+            logger.error(f"Could not save progress: {e}")
     
-    def mark_processed(self, filepath: Path, mod_time: datetime) -> None:
-        """Record file processing with modification time"""
-        self.processed_files[str(filepath)] = mod_time.isoformat()
-        self.save_progress()
+    def get_tracking_key(self, filepath: Path, file_context: FileContext) -> str:
+        """Create unique key for file + rule combination."""
+        # Use filepath + target_table to make it rule-aware
+        return f"{filepath}||{file_context.target_table}"
     
-    def needs_processing(self, filepath: Path, current_mod_time: datetime) -> bool:
-        """Check if file is new or modified since last processing"""
-        stored_time = self.processed_files.get(str(filepath))
-        if not stored_time:
-            return True  # New file
-        
+    def calculate_file_hash(self, filepath: Path) -> str:
+        """Calculate SHA-256 hash of file content."""
+        hasher = hashlib.sha256()
         try:
-            stored_dt = datetime.fromisoformat(stored_time)
-            # Check if modified beyond tolerance
+            with open(filepath, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    hasher.update(chunk)
+            return hasher.hexdigest()
+        except Exception as e:
+            logger.error(f"Error calculating file hash for {filepath}: {e}")
+            return ""  # Return empty hash on error
+    
+    def _calculate_config_hash(self, file_context: FileContext) -> str:
+        """Calculate hash of processing configuration for this file."""
+        config_data = {
+            'target_table': file_context.target_table,
+            'start_row': file_context.start_row,
+            'start_col': file_context.start_col,
+            'mode': file_context.mode,
+            'hash_exclude_columns': sorted(file_context.hash_exclude_columns),
+        }
+        return hashlib.sha256(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
+    
+    def needs_processing(self, filepath: Path, file_context: FileContext) -> bool:
+        """Check if file needs processing using hybrid approach (timestamp + hash)."""
+        if not filepath.exists():
+            return False
+        
+        tracking_key = self.get_tracking_key(filepath, file_context)
+        current_mod_time = datetime.fromtimestamp(filepath.stat().st_mtime)
+        stored_info = self.processed_files.get(tracking_key)
+        
+        # New file - definitely process
+        if not stored_info:
+            return True
+        
+        # Fast check: timestamp unchanged within tolerance
+        try:
+            stored_dt = datetime.fromisoformat(stored_info['timestamp'])
             time_diff = abs((current_mod_time - stored_dt).total_seconds())
-            return time_diff > 1.0  # 1 second tolerance
-        except Exception:
-            return True  # Corrupted timestamp, reprocess
+            
+            if time_diff <= 1.0:  # 1 second tolerance
+                # Timestamp unchanged, check if configuration changed
+                current_config_hash = self._calculate_config_hash(file_context)
+                stored_config_hash = stored_info.get('config_hash', '')
+                
+                if current_config_hash == stored_config_hash:
+                    return False  # Same content, same config - skip processing
+                else:
+                    return True  # Same content, different config - reprocess
+                    
+        except Exception as e:
+            logger.warning(f"Error checking timestamp for {filepath}: {e}")
+            # Fall through to hash check
+        
+        # Slow check: content hash + config hash
+        current_content_hash = self.calculate_file_hash(filepath)
+        current_config_hash = self._calculate_config_hash(file_context)
+        
+        # If file hash calculation failed, reprocess to be safe
+        if not current_content_hash:
+            return True
+        
+        stored_content_hash = stored_info.get('hash', '')
+        stored_config_hash = stored_info.get('config_hash', '')
+        
+        # If both content AND config are unchanged, skip processing
+        if (current_content_hash == stored_content_hash and 
+            current_config_hash == stored_config_hash):
+            # Update timestamp but don't reprocess
+            self.mark_processed(filepath, file_context)
+            return False
+        
+        # Either content or config changed - needs processing
+        return True
+    
+    def mark_processed(self, filepath: Path, file_context: FileContext) -> None:
+        """Record file processing with content hash and config hash."""
+        tracking_key = self.get_tracking_key(filepath, file_context)
+        current_content_hash = self.calculate_file_hash(filepath)
+        current_config_hash = self._calculate_config_hash(file_context)
+        current_mod_time = datetime.fromtimestamp(filepath.stat().st_mtime)
+        
+        self.processed_files[tracking_key] = {
+            "timestamp": current_mod_time.isoformat(),
+            "hash": current_content_hash,
+            "config_hash": current_config_hash
+        }
+        self.save_progress()
 
 class FileProcessor:
     """Handles file operations and data extraction."""
@@ -356,27 +583,70 @@ class FileProcessor:
             hashes.append(hasher.hexdigest())
         return hashes
 
+    def _is_numeric(self, value) -> bool:
+        """Check if a value is numeric."""
+        if pd.isna(value):
+            return True
+        try:
+            float(value)
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    def _is_date(self, value) -> bool:
+        """Check if a value is a date or can be parsed as date."""
+        if pd.isna(value):
+            return True
+        if isinstance(value, (datetime, pd.Timestamp)):
+            return True
+        if isinstance(value, str):
+            try:
+                pd.to_datetime(value)
+                return True
+            except (ValueError, TypeError):
+                return False
+        return False
+
+    def _is_boolean(self, value) -> bool:
+        """Check if a value is boolean."""
+        if pd.isna(value):
+            return True
+        if isinstance(value, bool):
+            return True
+        if isinstance(value, (int, float)):
+            return value in [0, 1]
+        if isinstance(value, str):
+            return value.lower() in ['true', 'false', 'yes', 'no', '1', '0', 't', 'f', 'y', 'n']
+        return False
+
 class PostgresLoader:
-    """Main loader class with intelligent duplicate handling and Teams notifications."""
+    """Main loader class with intelligent duplicate handling and automatic table creation."""
     
-    def __init__(self, db_config: Dict[str, Any],
-                 global_start_row: int = 0, global_start_col: int = 0,
+    def __init__(self, global_start_row: int = 0, global_start_col: int = 0,
                  delete_files: str = "N",
-                 global_config_file: str = None,
+                 global_config_file: str = GLOBAL_CONFIG_FILE,
                  rules_folder_path: str = "rules"):
         
         self.config = self._load_global_config(global_config_file)
         self.processing_rules = self._load_processing_rules(rules_folder_path)
-        self.db_manager = DatabaseManager(db_config, self.config)
+        self.db_manager = DatabaseManager(self.config.get_db_config(), self.config)
         self.validator = DataValidator(self.config)
         self.file_processor = FileProcessor(self.config)
-        self.progress_tracker = ProgressTracker() if self.config.enable_progress_tracking else None
+        self.progress_tracker = HybridProgressTracker() if self.config.enable_progress_tracking else None
         
         self.global_start_row = global_start_row
         self.global_start_col = global_start_col
         self.delete_files = delete_files.upper() == "Y"
         self.lock_acquired = False
         self.run_id = datetime.now().isoformat()
+        
+        # Create directories if they don't exist
+        os.makedirs(DUPLICATES_ROOT_DIR, exist_ok=True)
+        os.makedirs(DUPLICATES_TO_PROCESS_DIR, exist_ok=True)
+        os.makedirs(DUPLICATES_PROCESSED_DIR, exist_ok=True)
+        os.makedirs(FORMAT_CONFLICT_DIR, exist_ok=True)
+        os.makedirs(FORMAT_CONFLICT_TO_PROCESS_DIR, exist_ok=True)
+        os.makedirs(FORMAT_CONFLICT_PROCESSED_DIR, exist_ok=True)
         
         # Acquire lock to prevent concurrent runs
         self._acquire_lock()
@@ -390,10 +660,6 @@ class PostgresLoader:
             lock_time = os.path.getmtime(LOCK_FILE)
             if time.time() - lock_time < self.config.lock_timeout:
                 logger.error("Another instance is running. Exiting.")
-                self.send_teams_notification(
-                    "⛔ LOADER BLOCKED",
-                    f"Another instance is already running\nLock file: {LOCK_FILE}"
-                )
                 sys.exit(0)
             else:
                 logger.warning("Stale lock file detected. Removing...")
@@ -411,38 +677,8 @@ class PostgresLoader:
             os.remove(LOCK_FILE)
             logger.info("Lock released")
     
-    def send_teams_notification(self, title: str, message: str):
-        """Send notification to Microsoft Teams channel"""
-        if not self.config.teams_webhook:
-            return False
-        
-        try:
-            payload = {
-                "@type": "MessageCard",
-                "@context": "http://schema.org/extensions",
-                "themeColor": "0076D7" if "SUCCESS" in title else "FF0000",
-                "summary": "ETL Loader Notification",
-                "sections": [{
-                    "activityTitle": title,
-                    "activitySubtitle": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "text": message,
-                    "markdown": True
-                }]
-            }
-            
-            response = requests.post(
-                self.config.teams_webhook,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-                timeout=5
-            )
-            return response.status_code == 200
-        except Exception as e:
-            logger.error(f"Teams notification failed: {e}")
-            return False
-    
-    def _load_global_config(self, config_file: Optional[str]) -> ProcessingConfig:
-        if config_file and os.path.exists(config_file):
+    def _load_global_config(self, config_file: str) -> ProcessingConfig:
+        if os.path.exists(config_file):
             try:
                 with open(config_file, 'r') as f:
                     if config_file.endswith('.yaml') or config_file.endswith('.yml'):
@@ -453,6 +689,7 @@ class PostgresLoader:
             except Exception as e:
                 logger.warning(f"Could not load global config: {e}")
         
+        # Return default config if file doesn't exist or can't be loaded
         return ProcessingConfig()
     
     def _load_processing_rules(self, rules_folder: str) -> List[FileProcessingRule]:
@@ -478,7 +715,8 @@ class PostgresLoader:
                         start_col=rule_data.get('start_col'),
                         mode=rule_data.get('mode', 'insert'),
                         date_from_filename_col_name=rule_data.get('date_from_filename_col_name'),
-                        hash_exclude_columns=rule_data.get('hash_exclude_columns', [])
+                        hash_exclude_columns=rule_data.get('hash_exclude_columns', []),
+                        search_subdirectories=rule_data.get('search_subdirectories', True)
                     )
                     
                     is_valid, errors = rule.validate()
@@ -487,11 +725,158 @@ class PostgresLoader:
                         continue
                     
                     rules.append(rule)
-                    logger.info(f"Loaded rule '{base_name}' with hash exclusions: {rule.hash_exclude_columns}")
+                    logger.info(f"Loaded rule '{base_name}' with hash exclusions: {rule.hash_exclude_columns} and subdirectory search: {rule.search_subdirectories}")
                 except Exception as e:
                     logger.error(f"Failed to load rule: {e}")
         
         return rules
+    
+    @staticmethod
+    def extract_pattern_and_date_format(filename: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Extract file pattern and date format from a filename containing a date.
+        
+        Args:
+            filename (str): The filename to analyze (e.g., '123541-my report_011225.xls')
+        
+        Returns:
+            tuple: (pattern, date_format) or (None, None) if no date found
+        """
+        # Common date patterns to try (ordered by likelihood)
+        date_patterns = [
+            (r'(\d{4})(\d{2})(\d{2})', '%Y%m%d'),      # YYYYMMDD (e.g., 20240505)
+            (r'(\d{2})(\d{2})(\d{2})', '%m%d%y'),      # MMDDYY (e.g., 010125 → 01/01/25)
+            (r'(\d{2})(\d{2})(\d{4})', '%m%d%Y'),      # MMDDYYYY
+            (r'(\d{4})-(\d{2})-(\d{2})', '%Y-%m-%d'),  # YYYY-MM-DD
+            (r'(\d{2})-(\d{2})-(\d{4})', '%m-%d-%Y'),  # MM-DD-YYYY
+            (r'(\d{2})/(\d{2})/(\d{4})', '%m/%d/%Y'),  # MM/DD/YYYY
+            (r'(\d{2})(\d{2})(\d{2})', '%d%m%y'),      # DDMMYY (e.g., 010125 → 01/01/25)
+            (r'(\d{2})(\d{2})(\d{4})', '%d%m%Y'),      # DDMMYYYY
+        ]
+        
+        # Try each date pattern
+        for date_regex, date_format in date_patterns:
+            match = re.search(date_regex, filename)
+            if match:
+                # Extract the date part
+                date_str = ''.join(match.groups())
+                
+                # Try to parse with the suggested format to validate
+                try:
+                    # Remove non-digit characters for validation
+                    clean_format = date_format.replace('-', '').replace('/', '')
+                    datetime.strptime(date_str, clean_format)
+                    
+                    # Create the file pattern by replacing the date part with capture groups
+                    pattern = re.sub(date_regex, r'(\d{' + r'\d{'.join([str(len(g)) for g in match.groups()]) + '})', filename)
+                    
+                    # Escape special characters but keep the capture groups
+                    pattern = re.sub(r'([^a-zA-Z0-9\(\)])', r'\\\1', pattern)
+                    
+                    # Add start and end anchors
+                    pattern = '^' + pattern + '$'
+                    
+                    return pattern, date_format
+                except ValueError:
+                    continue
+        
+        return None, None
+    
+    @staticmethod
+    def test_pattern_on_filename(pattern: str, filename: str, date_format: Optional[str] = None) -> bool:
+        """
+        Test if a pattern matches a filename and optionally extract the date.
+        
+        Args:
+            pattern (str): Regex pattern to test
+            filename (str): Filename to test against
+            date_format (str, optional): Date format to validate extraction
+        
+        Returns:
+            bool: True if pattern matches (and date validates if provided)
+        """
+        match = re.match(pattern, filename)
+        if not match:
+            return False
+        
+        if date_format and match.groups():
+            # Try to parse the extracted date
+            date_str = ''.join(match.groups())
+            try:
+                # Remove non-digit characters for validation
+                clean_format = date_format.replace('-', '').replace('/', '')
+                datetime.strptime(date_str, clean_format)
+                return True
+            except ValueError:
+                return False
+        
+        return True
+    
+    def _sanitize_column_name(self, column_name: str) -> str:
+        """Convert column names to database-friendly format."""
+        # Convert to lowercase
+        sanitized = column_name.lower()
+        
+        # Replace spaces and special characters with underscores
+        sanitized = re.sub(r'[^a-z0-9_]', '_', sanitized)
+        
+        # Remove leading and trailing underscores
+        sanitized = sanitized.strip('_')
+        
+        # Ensure it doesn't start with a number
+        if sanitized and sanitized[0].isdigit():
+            sanitized = 'col_' + sanitized
+        
+        # Ensure it's not a reserved keyword
+        reserved_keywords = {'select', 'insert', 'update', 'delete', 'where', 'join', 
+                            'table', 'column', 'index', 'primary', 'key', 'foreign'}
+        if sanitized in reserved_keywords:
+            sanitized = 'col_' + sanitized
+        
+        return sanitized
+    
+    def _infer_postgres_type(self, pandas_type: str, sample_value: Any = None) -> str:
+        """Infer appropriate PostgreSQL data type with sample value validation."""
+        pandas_type_str = str(pandas_type).lower()
+        
+        # Basic type mapping
+        if 'int' in pandas_type_str:
+            return 'INTEGER'
+        elif 'float' in pandas_type_str:
+            return 'NUMERIC'
+        elif 'datetime' in pandas_type_str:
+            return 'TIMESTAMP'
+        elif 'bool' in pandas_type_str:
+            return 'BOOLEAN'
+        elif 'object' in pandas_type_str:
+            # Try to infer from sample value
+            if sample_value is not None:
+                if isinstance(sample_value, (int, np.integer)):
+                    return 'INTEGER'
+                elif isinstance(sample_value, (float, np.floating)):
+                    return 'NUMERIC'
+                elif isinstance(sample_value, (datetime, pd.Timestamp)):
+                    return 'TIMESTAMP'
+                elif isinstance(sample_value, bool):
+                    return 'BOOLEAN'
+                elif isinstance(sample_value, str):
+                    # Check if it's a date string
+                    try:
+                        datetime.strptime(sample_value, '%Y-%m-%d')
+                        return 'DATE'
+                    except (ValueError, TypeError):
+                        try:
+                            datetime.strptime(sample_value, '%Y-%m-%d %H:%M:%S')
+                            return 'TIMESTAMP'
+                        except (ValueError, TypeError):
+                            # Check string length for VARCHAR vs TEXT
+                            if len(sample_value) <= 255:
+                                return 'VARCHAR(255)'
+                            else:
+                                return 'TEXT'
+        
+        # Default to TEXT for anything else
+        return 'TEXT'
     
     def _validate_setup(self) -> None:
         logger.info("Validating setup...")
@@ -517,19 +902,25 @@ class PostgresLoader:
                     )
                 else:
                     logger.error(f"No sample file found for {rule.base_name}")
+            
+            # Ensure table exists before processing
+            if mapping_filepath.exists():
+                try:
+                    mapping = pd.read_csv(mapping_filepath)
+                    table_created = self.db_manager.create_table_if_not_exists(rule.target_table, mapping)
+                    if not table_created:
+                        logger.error(f"Failed to ensure table exists: {rule.target_table}")
+                except Exception as e:
+                    logger.error(f"Error validating table for {rule.target_table}: {e}")
 
         if not self.db_manager.test_connection():
-            self.send_teams_notification(
-                "🚨 DATABASE CONNECTION FAILED",
-                "Database connection test failed\nCheck connection settings"
-            )
             raise ConnectionError("Database connection test failed")
         
         logger.info("Setup validation completed")
     
     def _generate_mapping_file(self, source_filepath: Path, mapping_filepath: Path,
                               start_row: int = 0, start_col: int = 0):
-        """Generate mapping file based on sample file with LoadFlag='' for file columns."""
+        """Generate mapping file based on sample file with intelligent defaults."""
         try:
             if source_filepath.exists():
                 ext = source_filepath.suffix.lower()
@@ -548,45 +939,58 @@ class PostgresLoader:
                     df_sample = df_sample.iloc[:, start_col:]
                 columns = df_sample.columns.tolist()
                 dtypes = df_sample.dtypes.apply(str).to_dict()
+                
+                # Get sample values for better type inference
+                sample_values = {}
+                for col in columns:
+                    sample_values[col] = df_sample[col].iloc[0] if not df_sample[col].empty else None
             else:
                 columns = []
                 dtypes = {}
+                sample_values = {}
             
             mapping_data = []
             for i, col in enumerate(columns):
                 pd_type = dtypes.get(col, 'object')
-                sql_type = "TEXT"
-                if "int" in pd_type:
-                    sql_type = "INTEGER"
-                elif "float" in pd_type:
-                    sql_type = "NUMERIC"
-                elif "datetime" in pd_type:
-                    sql_type = "TIMESTAMP"
-                elif "bool" in pd_type:
-                    sql_type = "BOOLEAN"
+                sample_value = sample_values.get(col)
                 
+                # Use enhanced type inference
+                sql_type = self._infer_postgres_type(pd_type, sample_value)
+                
+                # Set default LoadFlag based on column content
+                load_flag = 'Y'  # Default to loading the column
+                
+                # Set default IndexColumn based on column name patterns
+                index_column = 'N'
+                if any(pattern in col.lower() for pattern in ['id', 'key', 'code', 'num']):
+                    index_column = 'Y'  # Likely a business key
+                    
                 mapping_data.append({
                     'RawColumn': col,
-                    'TargetColumn': col.lower().replace(' ', '_'),
+                    'TargetColumn': self._sanitize_column_name(col),
                     'DataType': sql_type,
-                    'LoadFlag': '',  # EMPTY to require user configuration
-                    'IndexColumn': 'N',
+                    'LoadFlag': load_flag,
+                    'IndexColumn': index_column,
                     'data_source': 'file',
                     'definition': '',
                     'order': i
                 })
             
-            # Add system columns
-            for col in RESERVED_COLUMNS:
-                sql_type = "TEXT"
-                if col == "loaded_timestamp":
-                    sql_type = "TIMESTAMP"
+            # Add system columns with appropriate types
+            system_columns = [
+                ('loaded_timestamp', 'TIMESTAMP', 'Y', 'N'),
+                ('source_filename', 'TEXT', 'Y', 'N'),
+                ('content_hash', 'TEXT', 'Y', 'N'),
+                ('operation', 'TEXT', 'Y', 'N')
+            ]
+            
+            for col_name, col_type, load_flag, index_column in system_columns:
                 mapping_data.append({
-                    'RawColumn': col,
-                    'TargetColumn': col,
-                    'DataType': sql_type,
-                    'LoadFlag': 'Y',  # Always enabled for system columns
-                    'IndexColumn': 'N',
+                    'RawColumn': col_name,
+                    'TargetColumn': col_name,
+                    'DataType': col_type,
+                    'LoadFlag': load_flag,
+                    'IndexColumn': index_column,
                     'data_source': 'system',
                     'definition': '',
                     'order': -1
@@ -610,7 +1014,7 @@ class PostgresLoader:
             
             mapping_filepath.parent.mkdir(parents=True, exist_ok=True)
             mapping_df.to_csv(mapping_filepath, index=False)
-            logger.info(f"Created mapping file: {mapping_filepath}")
+            logger.info(f"Created mapping file with intelligent defaults: {mapping_filepath}")
         except Exception as e:
             logger.error(f"Mapping generation failed: {e}")
             # Create empty mapping file as fallback
@@ -620,7 +1024,7 @@ class PostgresLoader:
             ]).to_csv(mapping_filepath, index=False)
     
     def _handle_new_columns(self, df: pd.DataFrame, file_context: FileContext) -> bool:
-        """Detect new columns, update mapping file, and block processing."""
+        """Detect new columns, update mapping file, and block processing until configured."""
         mapping = pd.read_csv(file_context.mapping_filepath)
         
         # Get current columns in data file order
@@ -629,7 +1033,7 @@ class PostgresLoader:
         new_cols = [col for col in current_cols if col not in existing_cols]
         
         if not new_cols:
-            return False
+            return False  # No new columns, continue processing
         
         logger.warning(f"New columns detected: {', '.join(new_cols)}")
         
@@ -651,8 +1055,8 @@ class PostgresLoader:
         for col in new_cols:
             updated_mapping.append({
                 'RawColumn': col,
-                'TargetColumn': col.lower().replace(' ', '_'),
-                'DataType': 'TEXT',
+                'TargetColumn': self._sanitize_column_name(col),
+                'DataType': 'TEXT',  # Default to TEXT
                 'LoadFlag': '',  # EMPTY to require user configuration
                 'IndexColumn': 'N',
                 'data_source': 'file',
@@ -668,11 +1072,225 @@ class PostgresLoader:
         updated_df.to_csv(file_context.mapping_filepath, index=False)
         logger.info(f"Updated mapping file with new columns at correct positions")
         
-        return True
+        # Check if any new columns are already configured for loading
+        configured_new_cols = []
+        for _, row in updated_df.iterrows():
+            if (row['RawColumn'] in new_cols and 
+                row['LoadFlag'] == 'Y' and 
+                pd.notna(row['DataType']) and
+                row['DataType'].strip() != ''):
+                configured_new_cols.append({
+                    'TargetColumn': row['TargetColumn'],
+                    'DataType': row['DataType']
+                })
+        
+        # If new columns are configured for loading and auto_add_columns is enabled, add them to the database table
+        if configured_new_cols and self.config.auto_add_columns:
+            logger.info(f"Adding {len(configured_new_cols)} configured new columns to table {file_context.target_table}")
+            success = self.db_manager.alter_table_add_columns(file_context.target_table, configured_new_cols)
+            if success:
+                logger.info(f"Successfully added new columns to table {file_context.target_table}")
+                return False  # Continue processing since columns were added
+            else:
+                logger.error(f"Failed to add new columns to table {file_context.target_table}")
+                return True  # Block processing due to database error
+        
+        # If we get here, there are new columns but they're not configured or auto_add is disabled
+        logger.warning(f"New columns detected but not configured. Please update {file_context.mapping_filepath}")
+        return True  # Block processing until user configures new columns
     
+    def _check_and_add_configured_columns(self, file_context: FileContext) -> bool:
+        """Check if any new columns have been configured and add them to the database table."""
+        if not self.config.auto_add_columns:
+            return True  # Skip if auto-add is disabled
+        
+        mapping = pd.read_csv(file_context.mapping_filepath)
+        
+        # Find new columns that are configured for loading
+        configured_new_cols = []
+        for _, row in mapping.iterrows():
+            if (row['data_source'] == 'file' and 
+                row['LoadFlag'] == 'Y' and 
+                pd.notna(row['DataType']) and
+                row['DataType'].strip() != '' and
+                not self.db_manager.column_exists(file_context.target_table, row['TargetColumn'])):
+                configured_new_cols.append({
+                    'TargetColumn': row['TargetColumn'],
+                    'DataType': row['DataType']
+                })
+        
+        # If new columns are configured for loading, add them to the database table
+        if configured_new_cols:
+            logger.info(f"Adding {len(configured_new_cols)} configured new columns to table {file_context.target_table}")
+            success = self.db_manager.alter_table_add_columns(file_context.target_table, configured_new_cols)
+            if success:
+                logger.info(f"Successfully added new columns to table {file_context.target_table}")
+                return True  # Columns were added
+            else:
+                logger.error(f"Failed to add new columns to table {file_context.target_table}")
+                return False  # Failed to add columns
+        
+        return True  # No columns to add or they already exist
+    
+    def _validate_data_types(self, df: pd.DataFrame, mapping: pd.DataFrame, filename: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Validate data types against mapping definitions and identify conflicts.
+        Returns a tuple of (clean_df, conflict_df)
+        """
+        clean_rows = []
+        conflict_rows = []
+        
+        # Get mapping for file columns that should be loaded
+        file_columns_to_load = mapping[
+            (mapping['data_source'] == 'file') & 
+            (mapping['LoadFlag'] == 'Y')
+        ]
+        
+        for index, row in df.iterrows():
+            has_conflict = False
+            conflict_details = []
+            
+            for _, map_row in file_columns_to_load.iterrows():
+                col_name = map_row['RawColumn']
+                if col_name in row.index:
+                    expected_type = map_row['DataType'].upper()
+                    value = row[col_name]
+                    
+                    # Check if value matches expected type
+                    if expected_type in ['INTEGER', 'NUMERIC', 'DECIMAL', 'FLOAT', 'DOUBLE']:
+                        if not self.file_processor._is_numeric(value):
+                            has_conflict = True
+                            conflict_details.append(f"{col_name}: expected numeric, got '{value}'")
+                    
+                    elif expected_type.startswith('VARCHAR') or expected_type == 'TEXT':
+                        if not isinstance(value, str) and not pd.isna(value):
+                            has_conflict = True
+                            conflict_details.append(f"{col_name}: expected string, got '{value}'")
+                    
+                    elif expected_type in ['DATE', 'TIMESTAMP', 'TIME']:
+                        if not self.file_processor._is_date(value):
+                            has_conflict = True
+                            conflict_details.append(f"{col_name}: expected date/time, got '{value}'")
+                    
+                    elif expected_type == 'BOOLEAN':
+                        if not self.file_processor._is_boolean(value):
+                            has_conflict = True
+                            conflict_details.append(f"{col_name}: expected boolean, got '{value}'")
+            
+            if has_conflict:
+                conflict_row = row.copy()
+                conflict_row['_conflict_type'] = 'FORMAT_CONFLICT'
+                conflict_row['_conflict_details'] = ' | '.join(conflict_details)
+                conflict_rows.append(conflict_row)
+            else:
+                clean_rows.append(row)
+        
+        clean_df = pd.DataFrame(clean_rows) if clean_rows else pd.DataFrame()
+        conflict_df = pd.DataFrame(conflict_rows) if conflict_rows else pd.DataFrame()
+        
+        return clean_df, conflict_df
+
+    def _export_duplicates(self, conflict_df: pd.DataFrame, file_context: FileContext):
+        """Export conflicts to duplicates folder with original filename."""
+        # Create duplicates directory
+        dup_dir = Path(DUPLICATES_ROOT_DIR)
+        dup_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Use original filename
+        export_filename = file_context.filename
+        export_path = dup_dir / export_filename
+        
+        # Ensure all expected metadata columns are present
+        if '_conflict_type' not in conflict_df.columns:
+            conflict_df['_conflict_type'] = 'UNKNOWN_CONFLICT'
+        
+        if '_business_key' not in conflict_df.columns:
+            # Try to create a business key from index columns if available
+            mapping = pd.read_csv(file_context.mapping_filepath)
+            business_keys = mapping[
+                (mapping['IndexColumn'] == 'Y') & 
+                (mapping['LoadFlag'] == 'Y')
+            ]['RawColumn'].tolist()
+            
+            if business_keys:
+                target_key_cols = []
+                for raw_col in business_keys:
+                    map_row = mapping[(mapping['RawColumn'] == raw_col) & (mapping['LoadFlag'] == 'Y')]
+                    if not map_row.empty:
+                        target_col = map_row.iloc[0]['TargetColumn']
+                        if target_col in conflict_df.columns:
+                            target_key_cols.append(target_col)
+                
+                if target_key_cols:
+                    conflict_df['_business_key'] = conflict_df[target_key_cols].astype(str).agg('|'.join, axis=1)
+                else:
+                    conflict_df['_business_key'] = ''
+            else:
+                conflict_df['_business_key'] = ''
+        
+        # Add detailed guidance
+        conflict_df['_GUIDANCE'] = conflict_df['_conflict_type'].apply(
+            self._get_conflict_guidance
+        )
+        
+        # Sort by business key and conflict type
+        if '_business_key' in conflict_df.columns:
+            conflict_df = conflict_df.sort_values(by=['_business_key', '_conflict_type'])
+        
+        # Save with guidance
+        conflict_df.to_csv(export_path, index=False)
+        
+        logger.warning(f"Exported {len(conflict_df)} conflicts to {export_path}")
+        logger.info(f"Review file: {export_path}")
+
+    def _export_format_conflicts(self, conflict_df: pd.DataFrame, file_context: FileContext):
+        """Export format conflicts to format_conflict folder with original filename."""
+        # Use original filename
+        export_filename = file_context.filename
+        export_path = Path(FORMAT_CONFLICT_DIR) / export_filename
+        
+        # Ensure all expected metadata columns are present
+        if '_conflict_type' not in conflict_df.columns:
+            conflict_df['_conflict_type'] = 'FORMAT_CONFLICT'
+        
+        if '_conflict_details' not in conflict_df.columns:
+            conflict_df['_conflict_details'] = 'Unknown format conflict'
+        
+        # Add guidance for resolution
+        conflict_df['_GUIDANCE'] = "Review data type inconsistencies. Fix the values to match the expected data types and place this file in the format_conflict/to_process folder for reprocessing."
+        
+        # Save with conflict details
+        conflict_df.to_csv(export_path, index=False)
+        
+        logger.warning(f"Exported {len(conflict_df)} format conflicts to {export_path}")
+        logger.info(f"Review file: {export_path}")
+
+    def _get_conflict_guidance(self, conflict_type: str) -> str:
+        """Generate specific guidance per conflict type"""
+        guidance = {
+            'EXACT_DUPLICATE': 
+                "ACTION: Delete all but one identical row. These are 100% identical duplicates.",
+                
+            'BUSINESS_KEY_CONFLICT': 
+                "DECISION REQUIRED: Different data for same business key. "
+                "Keep only one version per key. Delete others or merge data.",
+                
+            'EXACT_AND_BUSINESS_CONFLICT':
+                "CRITICAL: Both exact and business key duplicates exist. "
+                "First resolve exact duplicates, then business key conflicts.",
+                
+            'FORMAT_CONFLICT':
+                "Review data type inconsistencies. Fix the values to match the expected data types.",
+                
+            'UNKNOWN_CONFLICT':
+                "Manual review required. Unknown conflict type detected."
+        }
+        return guidance.get(conflict_type, "Manual review required")
+
     def get_files_to_process(self) -> List[FileContext]:
         all_potential_file_contexts = []
 
+        # Process regular files from rule directories
         for rule in self.processing_rules:
             rule_source_dir = Path(rule.directory)
             if not rule_source_dir.exists():
@@ -682,9 +1300,17 @@ class PostgresLoader:
             if not mapping_filepath.exists():
                 continue
 
-            # Process regular files
-            for file_path in rule_source_dir.iterdir():
-                if file_path.is_file() and file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']:
+            # Process regular files in all subdirectories (if enabled) or only in the base directory
+            if rule.search_subdirectories:
+                search_pattern = rule_source_dir.rglob('*')
+            else:
+                search_pattern = rule_source_dir.iterdir()
+
+            for file_path in search_pattern:
+                if (file_path.is_file() and 
+                    file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json'] and
+                    not any(part in [DUPLICATES_ROOT_DIR, FORMAT_CONFLICT_DIR] for part in file_path.parts)):
+                    
                     filename = file_path.name
                     match = rule.match(filename)
                     
@@ -714,63 +1340,124 @@ class PostgresLoader:
                             hash_exclude_columns=rule.hash_exclude_columns
                         )
                         all_potential_file_contexts.append(file_context)
-            
-            # Process duplicate files
-            dup_dir = rule_source_dir / DUPLICATES_DIR
-            if dup_dir.exists():
-                for dup_file in dup_dir.iterdir():
-                    if dup_file.is_file() and dup_file.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']:
-                        filename = dup_file.name
-                        match = rule.match(filename)
-                        
-                        if match:
-                            extracted_timestamp = ""
-                            if rule.date_format and match.groups():
-                                try:
-                                    date_str = "".join(match.groups())
-                                    datetime.strptime(date_str, rule.date_format) 
-                                    extracted_timestamp = date_str
-                                except ValueError:
-                                    pass
-                            
-                            file_modified = datetime.fromtimestamp(dup_file.stat().st_mtime)
-
-                            file_context = FileContext(
-                                filepath=dup_file,
-                                filename=filename,
-                                target_table=rule.target_table,
-                                mapping_filepath=mapping_filepath,
-                                extracted_timestamp_str=extracted_timestamp,
-                                file_modified_timestamp=file_modified,
-                                start_row=rule.start_row or self.global_start_row,
-                                start_col=rule.start_col or self.global_start_col,
-                                mode=rule.mode or "insert",
-                                date_from_filename_col_name=rule.date_from_filename_col_name,
-                                hash_exclude_columns=rule.hash_exclude_columns,
-                                is_duplicate=True
-                            )
-                            all_potential_file_contexts.append(file_context)
         
+        # Process files from duplicates/to_process directory
+        to_process_dir = Path(DUPLICATES_TO_PROCESS_DIR)
+        if to_process_dir.exists():
+            for file_path in to_process_dir.iterdir():
+                if (file_path.is_file() and 
+                    file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']):
+                    
+                    filename = file_path.name
+                    
+                    # Find matching rule for this file
+                    matching_rule = None
+                    for rule in self.processing_rules:
+                        match = rule.match(filename)
+                        if match:
+                            matching_rule = rule
+                            break
+                    
+                    if matching_rule:
+                        mapping_filepath = Path(matching_rule.directory) / matching_rule.mapping_file
+                        
+                        extracted_timestamp = ""
+                        if matching_rule.date_format and match.groups():
+                            try:
+                                date_str = "".join(match.groups())
+                                datetime.strptime(date_str, matching_rule.date_format) 
+                                extracted_timestamp = date_str
+                            except ValueError:
+                                pass
+                        
+                        file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
+
+                        file_context = FileContext(
+                            filepath=file_path,
+                            filename=filename,
+                            target_table=matching_rule.target_table,
+                            mapping_filepath=mapping_filepath,
+                            extracted_timestamp_str=extracted_timestamp,
+                            file_modified_timestamp=file_modified,
+                            start_row=matching_rule.start_row or self.global_start_row,
+                            start_col=matching_rule.start_col or self.global_start_col,
+                            mode=matching_rule.mode or "insert",
+                            date_from_filename_col_name=matching_rule.date_from_filename_col_name,
+                            hash_exclude_columns=matching_rule.hash_exclude_columns,
+                            is_duplicate=True
+                        )
+                        all_potential_file_contexts.append(file_context)
+        
+        # Process files from format_conflict/to_process directory
+        format_conflict_to_process_dir = Path(FORMAT_CONFLICT_TO_PROCESS_DIR)
+        if format_conflict_to_process_dir.exists():
+            for file_path in format_conflict_to_process_dir.iterdir():
+                if (file_path.is_file() and 
+                    file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']):
+                    
+                    filename = file_path.name
+                    
+                    # Find matching rule for this file
+                    matching_rule = None
+                    for rule in self.processing_rules:
+                        match = rule.match(filename)
+                        if match:
+                            matching_rule = rule
+                            break
+                    
+                    if matching_rule:
+                        mapping_filepath = Path(matching_rule.directory) / matching_rule.mapping_file
+                        
+                        extracted_timestamp = ""
+                        if matching_rule.date_format and match.groups():
+                            try:
+                                date_str = "".join(match.groups())
+                                datetime.strptime(date_str, matching_rule.date_format) 
+                                extracted_timestamp = date_str
+                            except ValueError:
+                                pass
+                        
+                        file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
+
+                        file_context = FileContext(
+                            filepath=file_path,
+                            filename=filename,
+                            target_table=matching_rule.target_table,
+                            mapping_filepath=mapping_filepath,
+                            extracted_timestamp_str=extracted_timestamp,
+                            file_modified_timestamp=file_modified,
+                            start_row=matching_rule.start_row or self.global_start_row,
+                            start_col=matching_rule.start_col or self.global_start_col,
+                            mode=matching_rule.mode or "insert",
+                            date_from_filename_col_name=matching_rule.date_from_filename_col_name,
+                            hash_exclude_columns=matching_rule.hash_exclude_columns,
+                            is_format_conflict=True  # New flag to identify format conflict files
+                        )
+                        all_potential_file_contexts.append(file_context)
+    
+        # Filter files based on processing status
         files_to_process = []
         for fc in all_potential_file_contexts:
-            # Skip unchanged files
-            if (self.progress_tracker and 
-                not self.progress_tracker.needs_processing(fc.filepath, fc.file_modified_timestamp)):
-                logger.info(f"Skipping unchanged file: {fc.filename}")
+            # Special cases: always process conflict resolution files
+            if getattr(fc, 'is_format_conflict', False) or fc.is_duplicate:
+                files_to_process.append(fc)
                 continue
             
-            # Skip already processed files
-            if self.progress_tracker and str(fc.filepath) in self.progress_tracker.processed_files:
-                logger.info(f"Skipping {fc.filename}: Already processed")
-                continue
+            # Enhanced progress checking with rule awareness
+            if self.progress_tracker:
+                needs_processing = self.progress_tracker.needs_processing(fc.filepath, fc)
+                
+                if not needs_processing:
+                    logger.info(f"Skipping unchanged file: {fc.filename}")
+                    continue
             
             # Skip unchanged files in audit mode
-            if fc.mode == "audit" and not fc.is_duplicate:
+            if fc.mode == "audit" and not fc.is_duplicate and not getattr(fc, 'is_format_conflict', False):
                 try:
                     if self.db_manager.file_exists_in_db(fc.target_table, fc.file_modified_timestamp, fc.filename):
-                        logger.info(f"Skipping {fc.filename}: Content unchanged")
+                        logger.info(f"Skipping {fc.filename}: Content unchanged in database")
                         if self.progress_tracker:
-                            self.progress_tracker.mark_processed(fc.filepath, fc.file_modified_timestamp)
+                            self.progress_tracker.mark_processed(fc.filepath, fc)
                         continue
                 except Exception as e:
                     logger.error(f"Audit check failed: {e}")
@@ -783,10 +1470,6 @@ class PostgresLoader:
     def process_files(self) -> Dict[str, int]:
         start_time = time.time()
         logger.info(f"=== STARTING RUN {self.run_id} ===")
-        self.send_teams_notification(
-            "🟢 LOADER STARTED",
-            f"Run ID: {self.run_id}\nFiles to process: Checking..."
-        )
         
         file_contexts = self.get_files_to_process()
         processed, failed = 0, 0
@@ -799,37 +1482,37 @@ class PostgresLoader:
         
         # Final status report
         duration = time.time() - start_time
-        status = f"Processed: {processed}, Failed: {failed}, Duration: {duration:.1f}s"
-        logger.info(f"Run completed. {status}")
-        
-        # Send Teams notification
-        if processed + failed > 0:
-            self.send_teams_notification(
-                "✅ LOADER COMPLETED" if failed == 0 else "⚠️ LOADER COMPLETED WITH ERRORS",
-                f"Run ID: {self.run_id}\n{status}"
-            )
+        logger.info(f"Run completed. Processed: {processed}, Failed: {failed}, Duration: {duration:.1f}s")
                 
         return {"processed": processed, "failed": failed}
     
     def process_file(self, file_context: FileContext) -> bool:
         try:
+            # Ensure table exists before processing
+            mapping = pd.read_csv(file_context.mapping_filepath)
+            if not self.db_manager.create_table_if_not_exists(file_context.target_table, mapping):
+                logger.error(f"Cannot process {file_context.filename}: Table {file_context.target_table} creation failed")
+                return False
+            
             if file_context.is_duplicate:
                 logger.info(f"Processing duplicate file: {file_context.filename}")
                 success = self._process_duplicate_file(file_context)
+            elif getattr(file_context, 'is_format_conflict', False):
+                logger.info(f"Processing format conflict file: {file_context.filename}")
+                success = self._process_format_conflict_file(file_context)
             else:
                 logger.info(f"Processing: {file_context.filename} -> Table: {file_context.target_table}")
                 success = self._process_regular_file(file_context)
             
-            # Update progress tracking
-            if success and self.progress_tracker:
-                self.progress_tracker.mark_processed(file_context.filepath, file_context.file_modified_timestamp)
+            # Update progress tracking (except for format conflict files which are handled separately)
+            if success and self.progress_tracker and not getattr(file_context, 'is_format_conflict', False):
+                self.progress_tracker.mark_processed(file_context.filepath, file_context)
             
             return success
             
         except Exception as e:
             error_msg = f"Error processing {file_context.filename}: {str(e)}"
             logger.error(error_msg, exc_info=True)
-            self.send_teams_notification("❗ PROCESSING ERROR", error_msg)
             return False
     
     def _process_regular_file(self, file_context: FileContext) -> bool:
@@ -845,43 +1528,55 @@ class PostgresLoader:
             logger.warning(f"File is empty: {file_context.filename}")
             return True
         
-        # Handle new columns
-        if self._handle_new_columns(df, file_context):
-            error_msg = f"New columns detected in {file_context.filename}. Processing blocked."
+        # Handle new columns - this will update the mapping file and potentially block processing
+        should_block = self._handle_new_columns(df, file_context)
+        if should_block:
+            error_msg = f"New columns detected in {file_context.filename}. Please configure them in {file_context.mapping_filepath}."
             logger.error(error_msg)
-            self.send_teams_notification("⚠️ NEW COLUMNS DETECTED", error_msg)
+            return False
+        
+        # Check if any newly configured columns need to be added to the database
+        columns_added = self._check_and_add_configured_columns(file_context)
+        if not columns_added:
+            error_msg = f"Failed to add configured columns to table {file_context.target_table}"
+            logger.error(error_msg)
             return False
         
         # Load mapping for validation
         mapping = pd.read_csv(file_context.mapping_filepath)
         
-        # Validate BEFORE processing duplicates to catch configuration issues early
-        is_valid, errors = self.validator.validate_dataframe(df, mapping, file_context.filename)
+        # Validate data types and separate conflicts
+        clean_df, format_conflict_df = self._validate_data_types(df, mapping, file_context.filename)
+        
+        # Export format conflicts if found
+        if not format_conflict_df.empty:
+            self._export_format_conflicts(format_conflict_df, file_context)
+            logger.warning(f"Found {len(format_conflict_df)} format conflicts in {file_context.filename}. These rows have been exported for manual correction.")
+        
+        # If no clean rows remain after filtering conflicts
+        if clean_df.empty:
+            logger.warning(f"No valid rows to process in {file_context.filename} after filtering format conflicts")
+            return True
+        
+        # Validate remaining data against mapping
+        is_valid, errors = self.validator.validate_dataframe(clean_df, mapping, file_context.filename)
         if errors:
             for error in errors:
                 logger.error(error)
-            self.send_teams_notification(
-                "❌ VALIDATION FAILED",
-                f"File: {file_context.filename}\nErrors:\n- " + "\n- ".join(errors)
-            )
         if not is_valid:
             return False
         
         # Calculate row hashes with custom exclusions
         hash_exclude = set(file_context.hash_exclude_columns)
-        df['content_hash'] = self.file_processor.calculate_row_hashes(df, hash_exclude)
+        clean_df['content_hash'] = self.file_processor.calculate_row_hashes(clean_df, hash_exclude)
         
         # Identify and isolate duplicates
-        unique_df, duplicates_df = self._identify_conflicts(df, file_context)
+        unique_df, duplicates_df = self._identify_conflicts(clean_df, file_context)
         
         # Export duplicates if found
         if not duplicates_df.empty:
             self._export_duplicates(duplicates_df, file_context)
             logger.warning(f"Found {len(duplicates_df)} duplicates in {file_context.filename}")
-            self.send_teams_notification(
-                "⚠️ DUPLICATES FOUND",
-                f"File: {file_context.filename}\nDuplicates: {len(duplicates_df)}"
-            )
         
         # Process only unique rows
         if unique_df.empty:
@@ -943,48 +1638,8 @@ class PostgresLoader:
         
         return clean_df, conflict_df
 
-    def _export_duplicates(self, conflict_df: pd.DataFrame, file_context: FileContext):
-        """Export conflicts to duplicates folder with original filename"""
-        # Create duplicates directory
-        dup_dir = file_context.filepath.parent / DUPLICATES_DIR
-        dup_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Use original filename
-        export_path = dup_dir / file_context.filename
-        
-        # Add detailed guidance
-        conflict_df['_GUIDANCE'] = conflict_df['_conflict_type'].apply(
-            self._get_conflict_guidance
-        )
-        
-        # Sort by business key and conflict type
-        if '_business_key' in conflict_df.columns:
-            conflict_df = conflict_df.sort_values(by=['_business_key', '_conflict_type'])
-        
-        # Save with guidance
-        conflict_df.to_csv(export_path, index=False)
-        
-        logger.warning(f"Exported {len(conflict_df)} conflicts to {export_path}")
-        logger.info(f"Review file: {export_path}")
-
-    def _get_conflict_guidance(self, conflict_type: str) -> str:
-        """Generate specific guidance per conflict type"""
-        guidance = {
-            'EXACT_DUPLICATE': 
-                "ACTION: Delete all but one identical row. These are 100% identical duplicates.",
-                
-            'BUSINESS_KEY_CONFLICT': 
-                "DECISION REQUIRED: Different data for same business key. "
-                "Keep only one version per key. Delete others or merge data.",
-                
-            'EXACT_AND_BUSINESS_CONFLICT':
-                "CRITICAL: Both exact and business key duplicates exist. "
-                "First resolve exact duplicates, then business key conflicts."
-        }
-        return guidance.get(conflict_type, "Manual review required")
-
     def _process_duplicate_file(self, file_context: FileContext) -> bool:
-        """Process a cleaned duplicate file"""
+        """Process a cleaned duplicate file from the to_process directory"""
         try:
             logger.info(f"Processing cleaned duplicates: {file_context.filename}")
             
@@ -999,15 +1654,116 @@ class PostgresLoader:
                 logger.warning(f"Cleaned duplicate file is empty: {file_context.filename}")
                 return True
                 
-            # Remove conflict resolution columns
-            conflict_cols = ['_conflict_type', '_GUIDANCE', '_business_key']
-            df = df.drop(columns=conflict_cols, errors='ignore')
+            # Remove conflict resolution columns if they exist (for duplicate files)
+            duplicate_metadata_cols = ['_conflict_type', '_GUIDANCE', '_business_key']
+            df = df.drop(columns=[col for col in duplicate_metadata_cols if col in df.columns], errors='ignore')
             
             # Process as unique data
-            return self._process_unique_data(df, file_context)
+            success = self._process_unique_data(df, file_context)
+            
+            # If successful, move the file to processed directory
+            if success:
+                processed_dir = Path(DUPLICATES_PROCESSED_DIR)
+                processed_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Add timestamp to filename to avoid conflicts
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                processed_filename = f"{file_context.filepath.stem}_processed_{timestamp}{file_context.filepath.suffix}"
+                processed_path = processed_dir / processed_filename
+                
+                shutil.move(str(file_context.filepath), str(processed_path))
+                logger.info(f"Moved processed duplicate file to: {processed_path}")
+            
+            return success
             
         except Exception as e:
             logger.error(f"Error processing duplicate file: {e}")
+            return False
+
+    def _process_format_conflict_file(self, file_context: FileContext) -> bool:
+        """Process a file from format_conflict/to_process directory"""
+        try:
+            logger.info(f"Processing format conflict file: {file_context.filename}")
+            
+            # Load the file
+            df = self.file_processor.load_file(
+                file_context.filepath,
+                file_context.start_row,
+                file_context.start_col
+            )
+            
+            if df.empty:
+                logger.warning(f"Format conflict file is empty: {file_context.filename}")
+                return True
+                
+            # Remove metadata columns if they exist (for format conflict files)
+            format_metadata_cols = ['_conflict_type', '_conflict_details', '_GUIDANCE']
+            df = df.drop(columns=[col for col in format_metadata_cols if col in df.columns], errors='ignore')
+            
+            # Now process the file as if it were a regular file
+            # We need to replicate the regular processing steps but skip the format conflict detection
+            # to avoid creating an infinite loop
+            
+            # Handle new columns
+            should_block = self._handle_new_columns(df, file_context)
+            if should_block:
+                error_msg = f"New columns detected in {file_context.filename}. Please configure them in {file_context.mapping_filepath}."
+                logger.error(error_msg)
+                return False
+            
+            # Check if any newly configured columns need to be added to the database
+            columns_added = self._check_and_add_configured_columns(file_context)
+            if not columns_added:
+                error_msg = f"Failed to add configured columns to table {file_context.target_table}"
+                logger.error(error_msg)
+                return False
+            
+            # Load mapping for validation
+            mapping = pd.read_csv(file_context.mapping_filepath)
+            
+            # Validate remaining data against mapping
+            is_valid, errors = self.validator.validate_dataframe(df, mapping, file_context.filename)
+            if errors:
+                for error in errors:
+                    logger.error(error)
+            if not is_valid:
+                return False
+            
+            # Calculate row hashes with custom exclusions
+            hash_exclude = set(file_context.hash_exclude_columns)
+            df['content_hash'] = self.file_processor.calculate_row_hashes(df, hash_exclude)
+            
+            # Identify and isolate duplicates (but don't export them again)
+            unique_df, duplicates_df = self._identify_conflicts(df, file_context)
+            
+            # If duplicates are found, log a warning but continue processing unique rows
+            if not duplicates_df.empty:
+                logger.warning(f"Found {len(duplicates_df)} duplicates in resolved format conflict file {file_context.filename}")
+            
+            # Process only unique rows
+            if unique_df.empty:
+                logger.info(f"No unique rows to process in {file_context.filename}")
+                return True
+                
+            success = self._process_unique_data(unique_df, file_context)
+            
+            # If successful, move the file to processed directory
+            if success:
+                processed_dir = Path(FORMAT_CONFLICT_PROCESSED_DIR)
+                processed_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Add timestamp to filename to avoid conflicts
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                processed_filename = f"{file_context.filepath.stem}_processed_{timestamp}{file_context.filepath.suffix}"
+                processed_path = processed_dir / processed_filename
+                
+                shutil.move(str(file_context.filepath), str(processed_path))
+                logger.info(f"Moved processed format conflict file to: {processed_path}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error processing format conflict file: {e}")
             return False
 
     def _process_unique_data(self, clean_df: pd.DataFrame, file_context: FileContext) -> bool:
@@ -1088,7 +1844,7 @@ class PostgresLoader:
         logger.info(f"Loading {len(new_rows)} changed rows")
         return self._load_data_to_db(new_rows, file_context.target_table)
 
-    def _process_cancel_replace_mode(self, df: pd.DataFrame, file_context: FileContext) -> bool:
+    def _process_cancel_and_replace_mode(self, df: pd.DataFrame, file_context: FileContext) -> bool:
         """Process file in cancel-and-replace mode with change detection"""
         try:
             with self.db_manager.get_connection() as conn:
@@ -1144,14 +1900,29 @@ class PostgresLoader:
                 conn.close()
 
 def create_sample_configs():
-    """Create sample configuration files."""
+    """Create sample configuration files and data."""
     os.makedirs("rules", exist_ok=True)
     os.makedirs("sales_data", exist_ok=True)
     os.makedirs("inventory_data", exist_ok=True)
     os.makedirs("weekly_data", exist_ok=True)
     
+    # Create sample subdirectories
+    os.makedirs("sales_data/2023/Q1", exist_ok=True)
+    os.makedirs("sales_data/2023/Q2", exist_ok=True)
+    os.makedirs("sales_data/2024/Q1", exist_ok=True)
+    
+    # Create format conflict directories
+    os.makedirs(FORMAT_CONFLICT_DIR, exist_ok=True)
+    os.makedirs(FORMAT_CONFLICT_TO_PROCESS_DIR, exist_ok=True)
+    os.makedirs(FORMAT_CONFLICT_PROCESSED_DIR, exist_ok=True)
+    
     # Global Config
     global_config = {
+        "dbname": "your_database_name",
+        "user": "your_username",
+        "password": "your_password",
+        "host": "localhost",
+        "port": 5432,
         "batch_size": 1000,
         "max_connections": 5,
         "min_connections": 1,
@@ -1160,8 +1931,8 @@ def create_sample_configs():
         "enable_data_validation": True,
         "timestamp_tolerance_seconds": 1.0,
         "global_hash_exclude_columns": [],
-        "teams_webhook": "https://yourcompany.webhook.office.com/...",  # REPLACE WITH YOUR WEBHOOK
-        "lock_timeout": 3600
+        "lock_timeout": 3600,
+        "auto_add_columns": True
     }
     with open(GLOBAL_CONFIG_FILE, 'w') as f:
         yaml.dump(global_config, f)
@@ -1175,18 +1946,39 @@ def create_sample_configs():
         "start_row": 0,
         "start_col": 0,
         "mode": "cancel_and_replace",
-        "hash_exclude_columns": []
+        "hash_exclude_columns": [],
+        "search_subdirectories": True
     }
     with open("rules/sales_rule.yaml", 'w') as f:
         yaml.dump(sales_rule, f)
     
-    # Create sample sales file
-    sales_data = pd.DataFrame({
-        'Date': ['2023-01-01', '2023-01-01', '2023-01-01', '2023-01-01'],
-        'Product': ['Laptop', 'Laptop', 'Laptop', 'Mouse'],
-        'Amount': [1200.50, 1200.50, 1100.00, 25.00]
+    # Create sample sales files in subdirectories
+    sales_data_q1 = pd.DataFrame({
+        'Product ID': [101, 102, 103, 104],
+        'Product Name': ['Laptop', 'Mouse', 'Keyboard', 'Monitor'],
+        'Price': [1200.50, 25.00, 75.00, 300.00],
+        'In Stock': [True, False, True, True],
+        'Last Updated': ['2023-01-01', '2023-01-01', '2023-01-01', '2023-01-01']
     })
-    sales_data.to_csv("sales_data/sales_report_20230101.csv", index=False)
+    sales_data_q1.to_csv("sales_data/2023/Q1/sales_report_20230101.csv", index=False)
+    
+    sales_data_q2 = pd.DataFrame({
+        'Product ID': [105, 106],
+        'Product Name': ['Tablet', 'Smartphone'],
+        'Price': [500.00, 800.00],
+        'In Stock': [True, False],
+        'Last Updated': ['2023-04-01', '2023-04-01']
+    })
+    sales_data_q2.to_csv("sales_data/2023/Q2/sales_report_20230401.csv", index=False)
+    
+    sales_data_2024 = pd.DataFrame({
+        'Product ID': [107, 108],
+        'Product Name': ['Smartwatch', 'Headphones'],
+        'Price': [250.00, 150.00],
+        'In Stock': [True, True],
+        'Last Updated': ['2024-01-01', '2024-01-01']
+    })
+    sales_data_2024.to_csv("sales_data/2024/Q1/sales_report_20240101.csv", index=False)
     
     # Inventory Rule
     inventory_rule = {
@@ -1196,7 +1988,9 @@ def create_sample_configs():
         "start_row": 0,
         "start_col": 0,
         "mode": "audit",
-        "hash_exclude_columns": []
+        'date_from_filename_col_name': "inventory_date",
+        "hash_exclude_columns": [],
+        "search_subdirectories": False
     }
     with open("rules/inventory_rule.yaml", 'w') as f:
         yaml.dump(inventory_rule, f)
@@ -1205,7 +1999,9 @@ def create_sample_configs():
     inventory_data = pd.DataFrame({
         'Item_ID': [101, 102],
         'Item_Name': ['Widget', 'Gadget'],
-        'Stock': [500, 750]
+        'Stock': [500, 750],
+        'Category': ['Electronics', 'Tools'],
+        'Price': [19.99, 29.99]
     })
     inventory_data.to_excel("inventory_data/inventory_2023-01-01.xlsx", index=False)
     
@@ -1214,11 +2010,12 @@ def create_sample_configs():
         "directory": "./weekly_data",
         "file_pattern": "^weekly_report_(\\d{8})\\.csv$",
         "date_format": "%Y%m%d",
-        "date_from_filename_col_name": "extract_date",
+        'date_from_filename_col_name': "extract_date",
         "start_row": 0,
         "start_col": 0,
         "mode": "cancel_and_replace",
-        "hash_exclude_columns": ["extract_date"]
+        "hash_exclude_columns": ["extract_date"],
+        "search_subdirectories": True
     }
     with open("rules/weekly_rule.yaml", 'w') as f:
         yaml.dump(weekly_rule, f)
@@ -1227,14 +2024,17 @@ def create_sample_configs():
     week1_data = pd.DataFrame({
         'ID': [1, 2, 3],
         'Name': ['ItemA', 'ItemB', 'ItemC'],
-        'Value': [100, 200, 300]
+        'Value': [100, 200, 300],
+        'Category': ['A', 'B', 'C']
     })
     week1_data.to_csv("weekly_data/weekly_report_20230604.csv", index=False)
     
     week2_data = pd.DataFrame({
         'ID': [1, 2, 3],
         'Name': ['ItemA', 'ItemB', 'ItemC'],
-        'Value': [100, 200, 350]
+        'Value': [100, 200, 350],
+        'Category': ['A', 'B', 'C'],
+        'New_Column': ['X', 'Y', 'Z']  # New column to test auto-detection
     })
     week2_data.to_csv("weekly_data/weekly_report_20230611.csv", index=False)
     
@@ -1248,20 +2048,32 @@ if __name__ == "__main__":
             os.remove(LOCK_FILE)
             print("Removed stale lock file")
     
-    create_sample_configs()
+    # Check if we're testing pattern extraction
+    if len(sys.argv) > 1 and sys.argv[1] == "--extract-pattern":
+        if len(sys.argv) < 3:
+            print("Usage: python script.py --extract-pattern <filename>")
+            sys.exit(1)
+        
+        filename = sys.argv[2]
+        pattern, date_format = PostgresLoader.extract_pattern_and_date_format(filename)
+        
+        if pattern and date_format:
+            print(f"Filename: {filename}")
+            print(f"Suggested pattern: {pattern}")
+            print(f"Suggested date format: {date_format}")
+            
+            # Test the pattern
+            is_valid = PostgresLoader.test_pattern_on_filename(pattern, filename, date_format)
+            print(f"Pattern validation: {'✓ PASS' if is_valid else '✗ FAIL'}")
+        else:
+            print(f"Could not extract pattern from: {filename}")
+        
+        sys.exit(0)
     
-    # Database configuration - REPLACE WITH YOUR ACTUAL CREDENTIALS
-    db_config = {
-        "dbname": "your_db",
-        "user": "your_user",
-        "password": "your_password",
-        "host": "localhost",
-        "port": 5432
-    }
+    create_sample_configs()
     
     try:
         loader = PostgresLoader(
-            db_config=db_config,
             global_config_file=GLOBAL_CONFIG_FILE,
             rules_folder_path='rules'
         )
