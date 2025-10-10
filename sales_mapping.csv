@@ -1,0 +1,8 @@
+RawColumn,TargetColumn,DataType,LoadFlag,IndexColumn,data_source,definition,order
+OrderID,orderid,INTEGER,Y,Y,file,,0
+Customer,customer,TEXT,Y,N,file,,1
+Amount,amount,NUMERIC,Y,N,file,,2
+loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,,3
+source_filename,source_filename,TEXT,Y,N,system,,4
+content_hash,content_hash,TEXT,Y,N,system,,5
+operation,operation,TEXT,Y,N,system,,6
