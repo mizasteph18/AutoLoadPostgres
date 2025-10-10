@@ -1,0 +1,14 @@
+base_name: "regional_data"
+directory: "inputs/regional_reports"
+file_pattern: "regional_\\d{8}\\.xlsx"
+date_format: "%Y%m%d"
+start_row: 0
+start_col: 0
+mode: "insert"
+date_from_filename_col_name: "report_date"
+hash_exclude_columns: []
+search_subdirectories: true
+sheet_config:
+  processing_method: "pattern"
+  sheet_name_pattern: "Region_.*"
+mapping_file: "rules/regional_mapping.csv"
