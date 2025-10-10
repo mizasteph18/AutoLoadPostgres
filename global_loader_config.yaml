@@ -1,0 +1,37 @@
+# Database Connection
+dbname: "your_database_name"
+user: "your_username"
+password: "your_password"
+host: "localhost"
+port: 5432
+
+# Processing Settings
+batch_size: 1000
+max_connections: 5
+min_connections: 1
+retry_attempts: 3
+
+# Features
+enable_progress_tracking: true
+enable_data_validation: true
+timestamp_tolerance_seconds: 1.0
+global_hash_exclude_columns: []
+lock_timeout: 3600
+auto_add_columns: true
+
+# File Handling
+delete_files: "N"
+
+# Empty Sheet Handling
+skip_empty_sheets: true
+warn_on_empty_sheets: true
+treat_empty_as_error: false
+
+# Enhanced Insertion Settings
+enable_row_level_recovery: true
+fail_on_partial_insert: false
+retry_on_deadlock: true
+max_retry_delay: 30
+enable_batch_validation: true
+chunk_size: 100
+max_chunk_failures: 5
