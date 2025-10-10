@@ -1,0 +1,11 @@
+base_name: "audit_data"
+directory: "inputs/audit_reports"
+file_pattern: "audit_\\d{8}\\.csv"
+date_format: "%Y%m%d"
+start_row: 0
+start_col: 0
+mode: "audit"
+date_from_filename_col_name: "file_date"
+hash_exclude_columns: []
+search_subdirectories: true
+mapping_file: "rules/audit_mapping.csv"
