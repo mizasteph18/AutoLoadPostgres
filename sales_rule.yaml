@@ -1,0 +1,11 @@
+base_name: "sales"
+directory: "inputs/sales_data"
+file_pattern: "sales_\\d{8}\\.csv"
+date_format: "%Y%m%d"
+start_row: 0
+start_col: 0
+mode: "insert"
+date_from_filename_col_name: "file_date"
+hash_exclude_columns: []
+search_subdirectories: true
+mapping_file: "rules/sales_mapping.csv"
