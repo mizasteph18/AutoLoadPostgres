@@ -1,0 +1,13 @@
+base_name: "weekly_reports"
+directory: "inputs/weekly_reports"
+file_pattern: "weekly_\\d{8}\\.xlsx"
+date_format: "%Y%m%d"
+start_row: 0
+start_col: 0
+mode: "insert"
+date_from_filename_col_name: "report_date"
+hash_exclude_columns: []
+search_subdirectories: true
+sheet_config:
+  processing_method: "all"
+mapping_file: "rules/weekly_mapping.csv"
