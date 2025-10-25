@@ -131,6 +131,9 @@ class ProcessingConfig:
     chunk_size: int = 100
     max_chunk_failures: int = 5
 
+    # NEW: Sample file control
+    generate_sample_files: bool = False
+
     def get_db_config(self) -> Dict[str, Any]:
         """Return database configuration as a dictionary."""
         return {
@@ -155,7 +158,7 @@ class FileProcessingRule:
     hash_exclude_columns: List[str] = field(default_factory=list)
     search_subdirectories: bool = True
     sheet_config: Dict[str, Any] = field(default_factory=dict)
-    mapping_file: str = None
+    mapping_file: str = None  # Explicit mapping file path
     _compiled_pattern: Any = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -208,7 +211,7 @@ class FileContext:
     filepath: Path
     filename: str
     target_table: str
-    mapping_filepath: Path
+    mapping_filepath: Path  # Now points to rules/mapping_file.csv
     extracted_timestamp_str: str
     file_modified_timestamp: datetime
     start_row: int
@@ -219,7 +222,7 @@ class FileContext:
     sheet_config: Dict[str, Any] = field(default_factory=dict)
     is_duplicate: bool = False
     is_format_conflict: bool = False
-    is_failed_row: bool = False
+    is_failed_row: bool = False  # For failed rows processing
     source_sheet: str = ""
 
 # ===========================
@@ -661,7 +664,7 @@ class FileProcessor:
                 if self._is_sheet_empty(df, start_col):
                     if self.config.warn_on_empty_sheets:
                         logger.warning(f"Sheet '{sheet_name}' is empty or contains only headers")
-                    return pd.DataFrame()
+                    return pd.DataFrame()  # Return empty DataFrame
                 df['_source_sheet'] = sheet_name
                 return df.iloc[:, start_col:]
             except ValueError as e:
@@ -737,12 +740,17 @@ class FileProcessor:
             logger.error(f"Error reading Excel file {file_path}: {e}")
             return []
 
-    def calculate_row_hashes(self, df: pd.DataFrame, exclude_columns: Set[str]) -> List[str]:
-        """Calculate content hashes for each row with custom exclusions."""
+    def calculate_row_hashes(self, df: pd.DataFrame, exclude_columns: Set[str], source_sheet: str = "") -> List[str]:
+        """Calculate content hashes for each row with custom exclusions and sheet awareness."""
         hashes = []
         for _, row in df.iterrows():
             exclude = HASH_EXCLUDE_COLS | set(exclude_columns)
             data = {k: v for k, v in row.items() if k not in exclude}
+            
+            # Include sheet name in hash calculation for multi-sheet files
+            if source_sheet and '_source_sheet' not in data:
+                data['_sheet_context'] = source_sheet
+                
             hasher = hashlib.sha256()
             hasher.update(json.dumps(data, sort_keys=True, default=str).encode('utf-8'))
             hashes.append(hasher.hexdigest())
@@ -839,31 +847,109 @@ class PostgresLoader:
         os.makedirs(FAILED_ROWS_TO_PROCESS_DIR, exist_ok=True)
         os.makedirs(FAILED_ROWS_PROCESSED_DIR, exist_ok=True)
 
-        # Log directory
+        # Log directory (already created in setup_logging, but ensure it exists)
         os.makedirs(LOG_DIR, exist_ok=True)
 
+    # ---------------------------
+    # Locking - IMPROVED
+    # ---------------------------
     def _acquire_lock(self):
-        """Prevent multiple concurrent runs with lock file"""
-        if os.path.exists(LOCK_FILE):
-            lock_time = os.path.getmtime(LOCK_FILE)
-            if time.time() - lock_time < self.config.lock_timeout:
-                logger.error("Another instance is running. Exiting.")
-                sys.exit(0)
-            else:
-                logger.warning("Stale lock file detected. Removing.")
-                os.remove(LOCK_FILE)
+        """Prevent multiple concurrent runs with lock file - IMPROVED"""
+        max_attempts = 5
+        attempt = 0
+        
+        while attempt < max_attempts:
+            if os.path.exists(LOCK_FILE):
+                try:
+                    lock_time = os.path.getmtime(LOCK_FILE)
+                    current_time = time.time()
+                    
+                    # Check if lock is stale (older than timeout)
+                    if current_time - lock_time < self.config.lock_timeout:
+                        # Check if the process that created the lock is still running
+                        try:
+                            with open(LOCK_FILE, 'r') as f:
+                                pid_str = f.read().strip()
+                                if pid_str.isdigit():
+                                    pid = int(pid_str)
+                                    # Check if process exists
+                                    try:
+                                        os.kill(pid, 0)  # This will raise OSError if process doesn't exist
+                                        # Process is still running
+                                        if attempt == max_attempts - 1:
+                                            logger.error("Another instance is running and lock is still valid. Exiting.")
+                                            sys.exit(0)
+                                        else:
+                                            logger.warning(f"Another instance is running (PID: {pid}). Waiting... (Attempt {attempt + 1}/{max_attempts})")
+                                            time.sleep(2)
+                                            attempt += 1
+                                            continue
+                                    except OSError:
+                                        # Process doesn't exist - stale lock
+                                        logger.warning("Stale lock file detected (process not running). Removing.")
+                                        os.remove(LOCK_FILE)
+                        except (IOError, ValueError):
+                            # Lock file is corrupt or empty
+                            logger.warning("Corrupt lock file detected. Removing.")
+                            os.remove(LOCK_FILE)
+                    else:
+                        # Lock file is too old
+                        logger.warning("Stale lock file detected (timeout exceeded). Removing.")
+                        os.remove(LOCK_FILE)
+                except OSError as e:
+                    logger.warning(f"Error checking lock file: {e}. Removing stale lock.")
+                    try:
+                        os.remove(LOCK_FILE)
+                    except:
+                        pass
 
-        with open(LOCK_FILE, 'w') as f:
-            f.write(str(os.getpid()))
-        self.lock_acquired = True
-        logger.info(f"Lock acquired for run {self.run_id}")
+            # Try to create lock file
+            try:
+                with open(LOCK_FILE, 'w') as f:
+                    f.write(str(os.getpid()))
+                self.lock_acquired = True
+                logger.info(f"Lock acquired for run {self.run_id}")
+                return
+            except IOError as e:
+                if attempt == max_attempts - 1:
+                    logger.error(f"Failed to acquire lock after {max_attempts} attempts: {e}")
+                    raise
+                else:
+                    logger.warning(f"Could not acquire lock (attempt {attempt + 1}/{max_attempts}): {e}")
+                    time.sleep(1)
+                    attempt += 1
+
+        logger.error("Failed to acquire lock after maximum attempts")
+        sys.exit(1)
 
     def _release_lock(self):
-        """Clean up lock file on exit"""
-        if self.lock_acquired and os.path.exists(LOCK_FILE):
-            os.remove(LOCK_FILE)
-            logger.info("Lock released")
+        """Clean up lock file on exit - IMPROVED"""
+        if self.lock_acquired:
+            try:
+                if os.path.exists(LOCK_FILE):
+                    # Verify we own the lock before removing it
+                    try:
+                        with open(LOCK_FILE, 'r') as f:
+                            lock_pid = f.read().strip()
+                        if lock_pid == str(os.getpid()):
+                            os.remove(LOCK_FILE)
+                            logger.info("Lock released successfully")
+                        else:
+                            logger.warning(f"Lock file owned by different process (PID: {lock_pid}), not removing")
+                    except (IOError, ValueError):
+                        logger.warning("Could not read lock file, removing anyway")
+                        os.remove(LOCK_FILE)
+                self.lock_acquired = False
+            except Exception as e:
+                logger.error(f"Error releasing lock: {e}")
 
+    def cleanup(self):
+        """Explicit cleanup method"""
+        self._release_lock()
+
+    # ---------------------------
+    # Configuration / Rules Loading
+    # ---------------------------
     def _load_global_config(self, config_file: str) -> ProcessingConfig:
         if os.path.exists(config_file):
             try:
@@ -923,6 +1009,9 @@ class PostgresLoader:
 
         return rules
 
+    # ---------------------------
+    # Pattern extraction helpers
+    # ---------------------------
     @staticmethod
     def extract_pattern_and_date_format(filename: str) -> Tuple[Optional[str], Optional[str]]:
         date_patterns = [
@@ -970,6 +1059,9 @@ class PostgresLoader:
 
         return True
 
+    # ---------------------------
+    # Column name sanitization & type inference
+    # ---------------------------
     def _sanitize_column_name(self, column_name: str) -> str:
         sanitized = column_name.lower()
         sanitized = re.sub(r'[^a-z0-9_]', '_', sanitized)
@@ -1016,6 +1108,9 @@ class PostgresLoader:
                                 return 'TEXT'
         return 'TEXT'
 
+    # ---------------------------
+    # Setup validation & mapping generation
+    # ---------------------------
     def _validate_setup(self) -> None:
         logger.info("Validating setup with organized directory structure...")
         for rule in self.processing_rules:
@@ -1159,6 +1254,9 @@ class PostgresLoader:
                 'data_source', 'definition', 'order'
             ]).to_csv(mapping_filepath, index=False)
 
+    # ---------------------------
+    # New columns handling
+    # ---------------------------
     def _handle_new_columns(self, df: pd.DataFrame, file_context: FileContext) -> bool:
         """Detect new columns, update mapping file, and block processing until configured."""
         mapping = pd.read_csv(file_context.mapping_filepath)
@@ -1253,6 +1351,9 @@ class PostgresLoader:
 
         return True
 
+    # ---------------------------
+    # Data type validation
+    # ---------------------------
     def _validate_data_types(self, df: pd.DataFrame, mapping: pd.DataFrame, filename: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
         clean_rows = []
         conflict_rows = []
@@ -1304,6 +1405,9 @@ class PostgresLoader:
 
         return clean_df, conflict_df
 
+    # ---------------------------
+    # Export helpers - ENHANCED: Use same file format as original
+    # ---------------------------
     def _get_conflict_guidance(self, conflict_type: str) -> str:
         guidance = {
             'EXACT_DUPLICATE':
@@ -1461,6 +1565,9 @@ class PostgresLoader:
         else:
             return 'UNKNOWN_ERROR'
 
+    # ---------------------------
+    # Enhanced database insertion with error handling
+    # ---------------------------
     def _bulk_insert_to_db(self, df: pd.DataFrame, target_table: str) -> bool:
         """
         Enhanced bulk insert with comprehensive error handling, retries, and row-level tracking.
@@ -1666,6 +1773,9 @@ class PostgresLoader:
         }
         return error_code in retryable_codes
 
+    # ---------------------------
+    # Files discovery - CORRECTED: Search in to_process directories
+    # ---------------------------
     def get_files_to_process(self) -> List[FileContext]:
         all_potential_file_contexts = []
 
@@ -1721,7 +1831,7 @@ class PostgresLoader:
                         )
                         all_potential_file_contexts.append(file_context)
 
-        # Search in duplicates/to_process/
+        # CORRECTED: Search in duplicates/to_process/
         duplicates_to_process_dir = Path(DUPLICATES_TO_PROCESS_DIR)
         if duplicates_to_process_dir.exists() and duplicates_to_process_dir.is_dir():
             for file_path in duplicates_to_process_dir.iterdir():
@@ -1767,7 +1877,7 @@ class PostgresLoader:
                         )
                         all_potential_file_contexts.append(file_context)
 
-        # Search in format_conflict/to_process/
+        # CORRECTED: Search in format_conflict/to_process/
         format_conflict_to_process_dir = Path(FORMAT_CONFLICT_TO_PROCESS_DIR)
         if format_conflict_to_process_dir.exists() and format_conflict_to_process_dir.is_dir():
             for file_path in format_conflict_to_process_dir.iterdir():
@@ -1813,7 +1923,7 @@ class PostgresLoader:
                         )
                         all_potential_file_contexts.append(file_context)
 
-        # Search in failed_rows/to_process/
+        # CORRECTED: Search in failed_rows/to_process/
         failed_rows_to_process_dir = Path(FAILED_ROWS_TO_PROCESS_DIR)
         if failed_rows_to_process_dir.exists() and failed_rows_to_process_dir.is_dir():
             for file_path in failed_rows_to_process_dir.iterdir():
@@ -1887,6 +1997,9 @@ class PostgresLoader:
         logger.info(f"Files to process: {len(files_to_process)}")
         return files_to_process
 
+    # ---------------------------
+    # Processing loop - ENHANCED: Consistent file movement to processed folders
+    # ---------------------------
     def process_files(self) -> Dict[str, int]:
         start_time = time.time()
         logger.info(f"=== STARTING RUN {self.run_id} ===")
@@ -1916,7 +2029,7 @@ class PostgresLoader:
             if getattr(file_context, 'is_failed_row', False):
                 logger.info(f"Processing failed rows file: {file_context.filename}")
                 success = self._process_failed_rows_file(file_context)
-                # Move to processed folder regardless of success/failure
+                # ENHANCED: Move to processed folder regardless of success/failure
                 if success:
                     self._move_to_processed(file_context.filepath, "failed_rows")
                 else:
@@ -1925,7 +2038,7 @@ class PostgresLoader:
             elif file_context.is_duplicate:
                 logger.info(f"Processing duplicate file: {file_context.filename}")
                 success = self._process_duplicate_file(file_context)
-                # Move to processed folder regardless of success/failure
+                # ENHANCED: Move to processed folder regardless of success/failure
                 if success:
                     self._move_to_processed(file_context.filepath, "duplicates")
                 else:
@@ -1934,7 +2047,7 @@ class PostgresLoader:
             elif getattr(file_context, 'is_format_conflict', False):
                 logger.info(f"Processing format conflict file: {file_context.filename}")
                 success = self._process_format_conflict_file(file_context)
-                # Move to processed folder regardless of success/failure
+                # ENHANCED: Move to processed folder regardless of success/failure
                 if success:
                     self._move_to_processed(file_context.filepath, "format_conflict")
                 else:
@@ -1950,7 +2063,7 @@ class PostgresLoader:
                     logger.info(f"Processing: {file_context.filename} -> Table: {file_context.target_table}")
                     success = self._process_single_sheet_file(file_context)
 
-                # Mark progress for regular files
+                # ENHANCED: Mark progress for regular files
                 if success and self.progress_tracker:
                     self.progress_tracker.mark_processed(file_context.filepath, file_context)
 
@@ -1972,6 +2085,9 @@ class PostgresLoader:
             logger.error(f"Error processing {file_context.filename}: {e}", exc_info=True)
             return False
 
+    # ---------------------------
+    # Metadata removal helper
+    # ---------------------------
     def _drop_metadata_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Remove loader-generated metadata columns if present."""
         if df is None or df.empty:
@@ -1982,6 +2098,9 @@ class PostgresLoader:
             df = df.drop(columns=drop_cols, errors="ignore")
         return df
 
+    # ---------------------------
+    # Multi-sheet Excel processing
+    # ---------------------------
     def _process_excel_file(self, file_context: FileContext) -> bool:
         """Process Excel file with multiple sheets."""
         processing_method = file_context.sheet_config.get('processing_method', 'specific')
@@ -2024,7 +2143,7 @@ class PostgresLoader:
                 success = False
             else:
                 logger.warning(f"All {total_sheets} sheets in {file_context.filename} were empty")
-                success = True
+                success = True  # Empty sheets are not considered errors
         
         logger.info(f"Processed {sheets_processed} sheet(s) from {file_context.filename}")
         return success
@@ -2076,7 +2195,7 @@ class PostgresLoader:
                 ]):
                     self.progress_tracker.mark_processed(file_context.filepath, file_context)
                 
-                return True
+                return True  # Success - empty sheets are not errors
             
             # Add sheet name to filename for tracking
             if file_context.source_sheet:
@@ -2139,23 +2258,33 @@ class PostgresLoader:
             logger.warning(f"No valid rows to process in {file_context.filename} after filtering format conflicts")
             return True
 
-        # Drop metadata columns again on clean_df
+        # Drop metadata columns again on clean_df (just in case)
         clean_df = self._drop_metadata_columns(clean_df)
 
-        # Calculate hashes
+        # Calculate hashes - FIXED: Include sheet context for proper duplicate detection
         hash_exclude = set(file_context.hash_exclude_columns or [])
-        clean_df['content_hash'] = self.file_processor.calculate_row_hashes(clean_df, hash_exclude)
+        clean_df['content_hash'] = self.file_processor.calculate_row_hashes(
+            clean_df, 
+            hash_exclude, 
+            file_context.source_sheet  # Pass sheet name for context
+        )
 
-        # Duplicate detection & export
+        # Enhanced duplicate detection with better logging
         existing_hashes = self.db_manager.get_existing_hashes(file_context.target_table, file_context.filename)
+        logger.info(f"Checking {len(clean_df)} rows against {len(existing_hashes)} existing hashes for {file_context.filename}")
+        
         duplicates_mask = clean_df['content_hash'].isin(existing_hashes)
         duplicates_df = clean_df[duplicates_mask]
         unique_df = clean_df[~duplicates_mask]
 
         if not duplicates_df.empty:
+            # Enhanced duplicate analysis
+            duplicate_count = len(duplicates_df)
+            logger.info(f"Found {duplicate_count} potential duplicates in {file_context.filename}")
+            
             # Export duplicates for manual resolution
             self._export_duplicates(duplicates_df, file_context)
-            logger.warning(f"Exported {len(duplicates_df)} duplicate rows from {file_context.filename} to {DUPLICATES_ROOT_DIR}")
+            logger.warning(f"Exported {duplicate_count} duplicate rows from {file_context.filename} to {DUPLICATES_ROOT_DIR}")
 
         if unique_df.empty:
             logger.info(f"No new unique rows to load from {file_context.filename}")
@@ -2168,8 +2297,8 @@ class PostgresLoader:
         insert_df = insert_df.rename(columns=col_map)
 
         # Add system columns - FIXED: Remove milliseconds from timestamp
-        insert_df['loaded_timestamp'] = datetime.now().replace(microsecond=0)
-        insert_df['source_filename'] = file_context.filename
+        insert_df['loaded_timestamp'] = datetime.now().replace(microsecond=0)  # No milliseconds
+        insert_df['source_filename'] = file_context.filename  # Includes sheet name if applicable
         insert_df['operation'] = file_context.mode
 
         # Load into DB with enhanced error handling
@@ -2185,6 +2314,9 @@ class PostgresLoader:
             logger.error(f"Load failed for {file_context.filename}: {e}", exc_info=True)
             return False
 
+    # ---------------------------
+    # Reprocessing methods - UPDATED for consistency
+    # ---------------------------
     def _process_duplicate_file(self, file_context: FileContext) -> bool:
         """Process a resolved duplicate file placed in duplicates/to_process/"""
         df = self.file_processor.load_file(
@@ -2197,7 +2329,7 @@ class PostgresLoader:
             logger.warning(f"Duplicate file is empty: {file_context.filename}")
             return True
 
-        # Remove metadata automatically
+        # Remove metadata automatically - CONSISTENT BEHAVIOR
         df = self._drop_metadata_columns(df)
 
         # Proceed as a regular file from here
@@ -2215,14 +2347,14 @@ class PostgresLoader:
             logger.warning(f"Format conflict file is empty: {file_context.filename}")
             return True
 
-        # Remove metadata automatically
+        # Remove metadata automatically - CONSISTENT BEHAVIOR
         df = self._drop_metadata_columns(df)
 
         # Proceed as regular file
         return self._process_dataframe(df, file_context)
 
     def _process_failed_rows_file(self, file_context: FileContext) -> bool:
-        """Process a corrected failed rows file."""
+        """Process a corrected failed rows file - CONSISTENT with duplicates/conflicts."""
         df = self.file_processor.load_file(
             file_context.filepath,
             file_context.start_row,
@@ -2234,12 +2366,15 @@ class PostgresLoader:
             logger.warning(f"Failed rows file is empty: {file_context.filename}")
             return True
 
-        # Auto-remove metadata
+        # CONSISTENT: Auto-remove metadata, just like duplicates/conflicts!
         df = self._drop_metadata_columns(df)
         
         # Process as regular file
         return self._process_dataframe(df, file_context)
 
+    # ---------------------------
+    # Utility methods - ENHANCED: Better file movement
+    # ---------------------------
     def _move_to_processed(self, filepath: Path, category: str):
         """Move file to processed directory with consistent naming."""
         processed_dir = Path(f"{category}/processed")
@@ -2310,7 +2445,10 @@ def create_sample_configs():
             "max_retry_delay": 30,
             "enable_batch_validation": True,
             "chunk_size": 100,
-            "max_chunk_failures": 5
+            "max_chunk_failures": 5,
+
+            # NEW: Sample file control
+            "generate_sample_files": False
         }
         with open(GLOBAL_CONFIG_FILE, 'w') as f:
             yaml.dump(global_config, f)
@@ -2426,7 +2564,7 @@ def create_sample_configs():
 # Main entrypoint
 # ===========================
 if __name__ == "__main__":
-    # Remove stale lock if older than lock_timeout
+    # Remove stale lock if older than lock_timeout (conservative)
     if os.path.exists(LOCK_FILE):
         try:
             lock_age = time.time() - os.path.getmtime(LOCK_FILE)
@@ -2454,7 +2592,25 @@ if __name__ == "__main__":
             print(f"Could not extract pattern from: {filename}")
         sys.exit(0)
 
-    create_sample_configs()
+    # NEW: Only create sample configs if explicitly enabled or first run
+    config_exists = os.path.exists(GLOBAL_CONFIG_FILE)
+    
+    if not config_exists:
+        # First run - create sample configs
+        create_sample_configs()
+    else:
+        # Check if sample generation is enabled in config
+        try:
+            with open(GLOBAL_CONFIG_FILE, 'r') as f:
+                config_data = yaml.safe_load(f)
+                generate_samples = config_data.get('generate_sample_files', False)
+                
+            if generate_samples:
+                create_sample_configs()
+            else:
+                logger.info("Sample file generation is disabled in config")
+        except Exception as e:
+            logger.warning(f"Could not read config to check sample generation setting: {e}")
 
     try:
         loader = PostgresLoader(
