@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PostgreSQL Data Loader - Enhanced with Failed Rows Recovery
+PostgreSQL Data Loader - Enhanced with Failed Rows Recovery & Precise OS Error Logging
 Organized Directory Structure: rules/ for configs, inputs/ for data
 """
 
@@ -61,40 +61,85 @@ METADATA_COLUMNS = {
 }
 
 # ===========================
-# Configure logging - ENHANCED with timestamped files
+# Configure logging - ENHANCED with OS error details
 # ===========================
 def setup_logging():
-    """Setup logging with timestamped log files in logs directory."""
+    """Setup logging with timestamped log files in logs directory with enhanced OS error details."""
     # Create logs directory if it doesn't exist
-    os.makedirs(LOG_DIR, exist_ok=True)
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        print(f"Log directory created/verified: {LOG_DIR}")
+    except OSError as e:
+        print(f"CRITICAL: Failed to create log directory {LOG_DIR}: {e}")
+        # Fallback to current directory
+        global LOG_DIR
+        LOG_DIR = "."
+        print(f"Using fallback log directory: {LOG_DIR}")
     
     # Generate log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"processing_{timestamp}.log"
     log_filepath = os.path.join(LOG_DIR, log_filename)
     
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_filepath),
-            logging.StreamHandler()
-        ]
-    )
-    
-    # Also create a symlink to the latest log for easy access
-    latest_log_path = os.path.join(LOG_DIR, "processing_latest.log")
     try:
-        if os.path.exists(latest_log_path):
-            os.remove(latest_log_path)
-        os.symlink(log_filepath, latest_log_path)
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+            handlers=[
+                logging.FileHandler(log_filepath, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        
+        # Also create a symlink to the latest log for easy access
+        latest_log_path = os.path.join(LOG_DIR, "processing_latest.log")
+        try:
+            if os.path.exists(latest_log_path):
+                os.remove(latest_log_path)
+            os.symlink(log_filepath, latest_log_path)
+            print(f"Created latest log symlink: {latest_log_path} -> {log_filepath}")
+        except OSError as e:
+            print(f"Could not create latest log symlink: {e} (errno: {e.errno})")
+            
     except Exception as e:
-        print(f"Could not create latest log symlink: {e}")
+        print(f"CRITICAL: Logging setup failed: {e}")
+        # Basic fallback logging
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    
+    # Get logger after setup
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging initialized. Log file: {log_filepath}")
+    return logger
 
-# Call setup_logging at module import
-setup_logging()
-logger = logging.getLogger(__name__)
+# Initialize logging
+logger = setup_logging()
+
+# Enhanced OS error logging decorator
+def log_os_operations(func):
+    """Decorator to add detailed OS error logging for file/directory operations."""
+    def wrapper(*args, **kwargs):
+        func_name = func.__name__
+        try:
+            result = func(*args, **kwargs)
+            logger.debug(f"OS operation successful: {func_name}")
+            return result
+        except OSError as e:
+            error_details = {
+                'function': func_name,
+                'error': str(e),
+                'errno': e.errno,
+                'filename': getattr(e, 'filename', 'N/A'),
+                'filename2': getattr(e, 'filename2', 'N/A'),
+                'args': str(args)[:200] + '...' if len(str(args)) > 200 else str(args),
+                'kwargs': {k: '***' if 'password' in k.lower() else v for k, v in kwargs.items()}
+            }
+            logger.error(f"OS operation failed: {error_details}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error in {func_name}: {type(e).__name__}: {e}")
+            raise
+    return wrapper
 
 # ===========================
 # Data classes
@@ -226,7 +271,7 @@ class FileContext:
     source_sheet: str = ""
 
 # ===========================
-# Database Manager
+# Enhanced Database Manager with OS logging
 # ===========================
 class DatabaseManager:
     """Handles database connections and operations with automatic table creation."""
@@ -237,6 +282,7 @@ class DatabaseManager:
         self.connection_pool = None
         self._initialize_pool()
 
+    @log_os_operations
     def _initialize_pool(self) -> None:
         try:
             self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
@@ -244,9 +290,9 @@ class DatabaseManager:
                 self.config.max_connections,
                 **self.db_config
             )
-            logger.info("Database connection pool initialized")
+            logger.info(f"Database connection pool initialized: {self.config.min_connections}-{self.config.max_connections} connections")
         except psycopg2.Error as e:
-            logger.critical(f"Failed to initialize connection pool: {e}")
+            logger.critical(f"Failed to initialize connection pool: {e} (pgcode: {getattr(e, 'pgcode', 'N/A')})")
             raise
 
     @contextmanager
@@ -258,7 +304,7 @@ class DatabaseManager:
         except psycopg2.Error as e:
             if conn:
                 conn.rollback()
-            logger.error(f"Database operation failed: {e}")
+            logger.error(f"Database operation failed: {e} (pgcode: {getattr(e, 'pgcode', 'N/A')})")
             raise
         finally:
             if conn:
@@ -269,6 +315,7 @@ class DatabaseManager:
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT 1")
+                    logger.info("Database connection test successful")
                     return True
         except Exception as e:
             logger.error(f"Database connection test failed: {e}")
@@ -285,9 +332,11 @@ class DatabaseManager:
                             WHERE table_name = %s
                         );
                     """, (table_name,))
-                    return cursor.fetchone()[0]
+                    exists = cursor.fetchone()[0]
+                    logger.debug(f"Table existence check for '{table_name}': {exists}")
+                    return exists
         except Exception as e:
-            logger.error(f"Error checking table existence: {e}")
+            logger.error(f"Error checking table existence for '{table_name}': {e}")
             return False
 
     def create_table_if_not_exists(self, table_name: str, mapping: pd.DataFrame) -> bool:
@@ -351,11 +400,14 @@ class DatabaseManager:
                         WHERE source_filename = %s
                     """).format(sql.Identifier(target_table))
                     cursor.execute(query, (source_filename,))
-                    return cursor.fetchone()[0]
+                    result = cursor.fetchone()[0]
+                    logger.debug(f"Latest timestamp for {source_filename} in {target_table}: {result}")
+                    return result
         except psycopg2.errors.UndefinedTable:
+            logger.debug(f"Table {target_table} does not exist yet")
             return None
         except Exception as e:
-            logger.error(f"Error getting latest timestamp: {e}")
+            logger.error(f"Error getting latest timestamp for {source_filename}: {e}")
             raise
 
     def delete_by_source_filename(self, conn, target_table: str, source_filename: str) -> int:
@@ -363,11 +415,14 @@ class DatabaseManager:
             with conn.cursor() as cursor:
                 query = sql.SQL("DELETE FROM {} WHERE source_filename = %s").format(sql.Identifier(target_table))
                 cursor.execute(query, (source_filename,))
-                return cursor.rowcount
+                deleted_count = cursor.rowcount
+                logger.info(f"Deleted {deleted_count} records from {target_table} for file {source_filename}")
+                return deleted_count
         except psycopg2.errors.UndefinedTable:
+            logger.debug(f"Table {target_table} does not exist, nothing to delete")
             return 0
         except Exception as e:
-            logger.error(f"Error deleting records: {e}")
+            logger.error(f"Error deleting records from {target_table}: {e}")
             raise
 
     def file_exists_in_db(self, target_table: str, file_modified_timestamp: datetime, source_filename: str) -> bool:
@@ -385,11 +440,14 @@ class DatabaseManager:
                         file_modified_timestamp,
                         self.config.timestamp_tolerance_seconds
                     ))
-                    return cursor.fetchone() is not None
+                    exists = cursor.fetchone() is not None
+                    logger.debug(f"File existence check for {source_filename}: {exists}")
+                    return exists
         except psycopg2.errors.UndefinedTable:
+            logger.debug(f"Table {target_table} does not exist")
             return False
         except Exception as e:
-            logger.error(f"File existence check failed: {e}")
+            logger.error(f"File existence check failed for {source_filename}: {e}")
             return False
 
     def get_existing_hashes(self, target_table: str, source_filename: str) -> set:
@@ -401,11 +459,14 @@ class DatabaseManager:
                         WHERE source_filename = %s
                     """).format(sql.Identifier(target_table))
                     cursor.execute(query, (source_filename,))
-                    return {row[0] for row in cursor.fetchall()}
+                    hashes = {row[0] for row in cursor.fetchall()}
+                    logger.debug(f"Retrieved {len(hashes)} existing hashes for {source_filename}")
+                    return hashes
         except psycopg2.errors.UndefinedTable:
+            logger.debug(f"Table {target_table} does not exist")
             return set()
         except Exception as e:
-            logger.error(f"Failed to get existing hashes: {e}")
+            logger.error(f"Failed to get existing hashes for {source_filename}: {e}")
             return set()
 
     def column_exists(self, table_name: str, column_name: str) -> bool:
@@ -419,9 +480,11 @@ class DatabaseManager:
                         WHERE table_name = %s AND column_name = %s
                     """)
                     cursor.execute(query, (table_name, column_name))
-                    return cursor.fetchone() is not None
+                    exists = cursor.fetchone() is not None
+                    logger.debug(f"Column existence check for {column_name} in {table_name}: {exists}")
+                    return exists
         except Exception as e:
-            logger.error(f"Error checking column existence: {e}")
+            logger.error(f"Error checking column existence for {column_name} in {table_name}: {e}")
             return False
 
     def alter_table_add_columns(self, table_name: str, new_columns: List[Dict[str, str]]) -> bool:
@@ -445,6 +508,7 @@ class DatabaseManager:
                             logger.info(f"Added column {column_name} to table {table_name}")
 
                     conn.commit()
+                    logger.info(f"Successfully added {len(new_columns)} columns to table {table_name}")
                     return True
         except Exception as e:
             logger.error(f"Failed to alter table {table_name}: {e}")
@@ -514,34 +578,46 @@ class HybridProgressTracker:
         self.progress_file = progress_file
         self.processed_files = self._load_progress()
 
+    @log_os_operations
     def _load_progress(self) -> dict:
         if os.path.exists(self.progress_file):
             try:
                 with open(self.progress_file, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    logger.info(f"Loaded progress data from {self.progress_file}: {len(data)} files tracked")
+                    return data
             except Exception as e:
-                logger.warning(f"Could not load progress file: {e}")
+                logger.warning(f"Could not load progress file {self.progress_file}: {e}")
+        else:
+            logger.info(f"Progress file {self.progress_file} does not exist, starting fresh")
         return {}
 
+    @log_os_operations
     def save_progress(self) -> None:
         try:
             with open(self.progress_file, 'w') as f:
                 json.dump(self.processed_files, f, indent=2)
+            logger.debug(f"Progress saved to {self.progress_file}: {len(self.processed_files)} files")
         except Exception as e:
-            logger.error(f"Could not save progress: {e}")
+            logger.error(f"Could not save progress to {self.progress_file}: {e}")
 
     def get_tracking_key(self, filepath: Path, file_context: FileContext) -> str:
         # Include sheet name in tracking key for multi-sheet Excel files
         sheet_suffix = f"::{file_context.source_sheet}" if file_context.source_sheet else ""
-        return f"{filepath}{sheet_suffix}||{file_context.target_table}"
+        key = f"{filepath}{sheet_suffix}||{file_context.target_table}"
+        logger.debug(f"Generated tracking key: {key}")
+        return key
 
+    @log_os_operations
     def calculate_file_hash(self, filepath: Path) -> str:
         hasher = hashlib.sha256()
         try:
             with open(filepath, 'rb') as f:
                 for chunk in iter(lambda: f.read(8192), b""):
                     hasher.update(chunk)
-            return hasher.hexdigest()
+            file_hash = hasher.hexdigest()
+            logger.debug(f"Calculated file hash for {filepath}: {file_hash[:16]}...")
+            return file_hash
         except Exception as e:
             logger.error(f"Error calculating file hash for {filepath}: {e}")
             return ""
@@ -556,10 +632,13 @@ class HybridProgressTracker:
             'sheet_config': file_context.sheet_config,
             'source_sheet': file_context.source_sheet
         }
-        return hashlib.sha256(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
+        config_hash = hashlib.sha256(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
+        logger.debug(f"Calculated config hash: {config_hash[:16]}...")
+        return config_hash
 
     def needs_processing(self, filepath: Path, file_context: FileContext) -> bool:
         if not filepath.exists():
+            logger.warning(f"File does not exist: {filepath}")
             return False
 
         tracking_key = self.get_tracking_key(filepath, file_context)
@@ -568,6 +647,7 @@ class HybridProgressTracker:
 
         # New file - definitely process
         if not stored_info:
+            logger.debug(f"New file detected: {filepath}")
             return True
 
         try:
@@ -579,8 +659,10 @@ class HybridProgressTracker:
                 stored_config_hash = stored_info.get('config_hash', '')
 
                 if current_config_hash == stored_config_hash:
+                    logger.debug(f"File unchanged (timestamp match): {filepath}")
                     return False
                 else:
+                    logger.info(f"Configuration changed for: {filepath}")
                     return True
         except Exception as e:
             logger.warning(f"Error checking timestamp for {filepath}: {e}")
@@ -589,6 +671,7 @@ class HybridProgressTracker:
         current_config_hash = self._calculate_config_hash(file_context)
 
         if not current_content_hash:
+            logger.warning(f"Could not calculate hash for {filepath}, will process")
             return True
 
         stored_content_hash = stored_info.get('hash', '')
@@ -597,8 +680,10 @@ class HybridProgressTracker:
         if (current_content_hash == stored_content_hash and
                 current_config_hash == stored_config_hash):
             self.mark_processed(filepath, file_context)
+            logger.debug(f"File unchanged (hash match): {filepath}")
             return False
 
+        logger.info(f"File changed: {filepath}")
         return True
 
     def mark_processed(self, filepath: Path, file_context: FileContext) -> None:
@@ -613,19 +698,24 @@ class HybridProgressTracker:
             "config_hash": current_config_hash
         }
         self.save_progress()
+        logger.debug(f"Marked file as processed: {filepath}")
 
 # ===========================
-# File Processor with Multi-Sheet Excel Support
+# Enhanced File Processor with Multi-Sheet Excel Support & OS logging
 # ===========================
 class FileProcessor:
-    """Handles file operations and data extraction with multi-sheet Excel support."""
+    """Handles file operations and data extraction with multi-sheet Excel support and enhanced OS logging."""
 
     def __init__(self, config: ProcessingConfig):
         self.config = config
 
+    @log_os_operations
     def load_file(self, file_path: Path, start_row: int = 0, start_col: int = 0, 
                   sheet_config: Dict[str, Any] = None) -> pd.DataFrame:
         file_ext = file_path.suffix.lower()
+        file_size = file_path.stat().st_size if file_path.exists() else 0
+        
+        logger.info(f"Loading file: {file_path} (size: {file_size} bytes, start_row: {start_row}, start_col: {start_col})")
         
         try:
             if file_ext == '.csv':
@@ -639,33 +729,42 @@ class FileProcessor:
             else:
                 raise ValueError(f"Unsupported file format: {file_ext}")
         except Exception as e:
-            logger.error(f"Error loading file {file_path}: {e}")
+            logger.error(f"Error loading file {file_path}: {type(e).__name__}: {e}")
             raise
 
+    @log_os_operations
     def _load_csv(self, file_path: Path, start_row: int, start_col: int) -> pd.DataFrame:
+        logger.debug(f"Loading CSV: {file_path}, skiprows: {start_row}, usecols from: {start_col}")
         if start_row and start_row > 0:
-            return pd.read_csv(file_path, skiprows=range(0, start_row), header=0).iloc[:, start_col:]
+            df = pd.read_csv(file_path, skiprows=range(0, start_row), header=0).iloc[:, start_col:]
         else:
-            return pd.read_csv(file_path, header=0).iloc[:, start_col:]
+            df = pd.read_csv(file_path, header=0).iloc[:, start_col:]
+        
+        logger.info(f"Loaded CSV: {len(df)} rows, {len(df.columns)} columns")
+        return df
 
+    @log_os_operations
     def _load_excel(self, file_path: Path, start_row: int, start_col: int, 
                     sheet_config: Dict[str, Any]) -> pd.DataFrame:
-        """Load Excel file with enhanced empty sheet detection."""
+        """Load Excel file with enhanced empty sheet detection and detailed logging."""
         
         if not sheet_config:
             sheet_config = {}
             
         processing_method = sheet_config.get('processing_method', 'specific')
+        logger.info(f"Loading Excel with method: {processing_method}, start_row: {start_row}, start_col: {start_col}")
         
         if processing_method == 'specific':
             sheet_name = sheet_config.get('specific_sheet', 'Sheet1')
             try:
+                logger.debug(f"Loading specific sheet: {sheet_name}")
                 df = pd.read_excel(file_path, sheet_name=sheet_name, skiprows=start_row, header=0)
                 if self._is_sheet_empty(df, start_col):
                     if self.config.warn_on_empty_sheets:
                         logger.warning(f"Sheet '{sheet_name}' is empty or contains only headers")
-                    return pd.DataFrame()  # Return empty DataFrame
+                    return pd.DataFrame()
                 df['_source_sheet'] = sheet_name
+                logger.info(f"Successfully loaded sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
                 return df.iloc[:, start_col:]
             except ValueError as e:
                 logger.error(f"Sheet '{sheet_name}' not found in {file_path}: {e}")
@@ -677,18 +776,23 @@ class FileProcessor:
         
         if processing_method == 'multiple':
             sheet_names = sheet_config.get('sheet_names', [])
+            logger.info(f"Processing multiple sheets: {sheet_names}")
         elif processing_method == 'all':
             all_sheets = pd.read_excel(file_path, sheet_name=None)
             sheet_names = list(all_sheets.keys()) if all_sheets else []
+            logger.info(f"Processing all sheets: {sheet_names}")
         elif processing_method == 'pattern':
             pattern = sheet_config.get('sheet_name_pattern', '.*')
             all_sheets = pd.read_excel(file_path, sheet_name=None)
             sheet_names = [name for name in (all_sheets.keys() if all_sheets else []) if re.match(pattern, name)]
+            logger.info(f"Processing pattern-matched sheets: {sheet_names} (pattern: {pattern})")
         else:
             sheet_names = []
+            logger.warning(f"Unknown processing method: {processing_method}")
         
         for sheet_name in sheet_names:
             try:
+                logger.debug(f"Processing sheet: {sheet_name}")
                 df = pd.read_excel(file_path, sheet_name=sheet_name, skiprows=start_row, header=0)
                 if self._is_sheet_empty(df, start_col):
                     if self.config.warn_on_empty_sheets:
@@ -698,15 +802,17 @@ class FileProcessor:
                 df['_source_sheet'] = sheet_name
                 dfs.append(df.iloc[:, start_col:])
                 sheets_processed += 1
+                logger.info(f"Successfully processed sheet '{sheet_name}': {len(df)} rows")
             except Exception as e:
-                logger.warning(f"Error processing sheet '{sheet_name}': {e}")
+                logger.warning(f"Error processing sheet '{sheet_name}': {type(e).__name__}: {e}")
         
         if sheets_processed == 0:
-            if self.config.warn_on_empty_sheets:
-                logger.warning(f"No data found in any sheets for {file_path}")
+            logger.warning(f"No data found in any sheets for {file_path} (checked {len(sheet_names)} sheets)")
             return pd.DataFrame()
         
-        return pd.concat(dfs, ignore_index=True)
+        result_df = pd.concat(dfs, ignore_index=True)
+        logger.info(f"Combined {sheets_processed} sheets into {len(result_df)} total rows")
+        return result_df
 
     def _is_sheet_empty(self, df: pd.DataFrame, start_col: int) -> bool:
         """Check if sheet is truly empty (beyond headers and start column)."""
@@ -731,18 +837,24 @@ class FileProcessor:
         
         return False
 
+    @log_os_operations
     def get_excel_sheet_names(self, file_path: Path) -> List[str]:
-        """Get all sheet names from an Excel file."""
+        """Get all sheet names from an Excel file with enhanced error handling."""
         try:
+            logger.debug(f"Reading Excel sheet names from: {file_path}")
             xl_file = pd.ExcelFile(file_path)
-            return xl_file.sheet_names
+            sheet_names = xl_file.sheet_names
+            logger.info(f"Found {len(sheet_names)} sheets in {file_path}: {sheet_names}")
+            return sheet_names
         except Exception as e:
-            logger.error(f"Error reading Excel file {file_path}: {e}")
+            logger.error(f"Error reading Excel file {file_path}: {type(e).__name__}: {e}")
             return []
 
     def calculate_row_hashes(self, df: pd.DataFrame, exclude_columns: Set[str], source_sheet: str = "") -> List[str]:
         """Calculate content hashes for each row with custom exclusions and sheet awareness."""
         hashes = []
+        logger.debug(f"Calculating row hashes for {len(df)} rows, excluding {len(exclude_columns)} columns")
+        
         for _, row in df.iterrows():
             exclude = HASH_EXCLUDE_COLS | set(exclude_columns)
             data = {k: v for k, v in row.items() if k not in exclude}
@@ -754,6 +866,8 @@ class FileProcessor:
             hasher = hashlib.sha256()
             hasher.update(json.dumps(data, sort_keys=True, default=str).encode('utf-8'))
             hashes.append(hasher.hexdigest())
+        
+        logger.debug(f"Calculated {len(hashes)} row hashes")
         return hashes
 
     def _is_numeric(self, value) -> bool:
@@ -790,7 +904,7 @@ class FileProcessor:
         return False
 
 # ===========================
-# Main Loader with Enhanced Error Handling
+# Enhanced Main Loader with OS error logging
 # ===========================
 class PostgresLoader:
     """Main loader class with organized directory structure and enhanced error handling."""
@@ -800,6 +914,8 @@ class PostgresLoader:
                  global_config_file: str = GLOBAL_CONFIG_FILE,
                  rules_folder_path: str = "rules"):
 
+        logger.info(f"Initializing PostgresLoader with config: {global_config_file}, rules: {rules_folder_path}")
+        
         self.config = self._load_global_config(global_config_file)
         self.config.delete_files = delete_files.upper()
 
@@ -824,48 +940,66 @@ class PostgresLoader:
 
         self._validate_setup()
 
+    @log_os_operations
     def _create_directory_structure(self):
-        """Create the organized directory structure."""
-        # Configuration directories
-        os.makedirs("rules", exist_ok=True)
-        
-        # Input data directories
-        os.makedirs("inputs/sales_data", exist_ok=True)
-        os.makedirs("inputs/inventory_data", exist_ok=True)
-        os.makedirs("inputs/weekly_reports", exist_ok=True)
-        
-        # Processing directories
-        os.makedirs(DUPLICATES_ROOT_DIR, exist_ok=True)
-        os.makedirs(DUPLICATES_TO_PROCESS_DIR, exist_ok=True)
-        os.makedirs(DUPLICATES_PROCESSED_DIR, exist_ok=True)
-        os.makedirs(FORMAT_CONFLICT_DIR, exist_ok=True)
-        os.makedirs(FORMAT_CONFLICT_TO_PROCESS_DIR, exist_ok=True)
-        os.makedirs(FORMAT_CONFLICT_PROCESSED_DIR, exist_ok=True)
-        
-        # Failed rows directories
-        os.makedirs(FAILED_ROWS_DIR, exist_ok=True)
-        os.makedirs(FAILED_ROWS_TO_PROCESS_DIR, exist_ok=True)
-        os.makedirs(FAILED_ROWS_PROCESSED_DIR, exist_ok=True)
+        """Create the organized directory structure with detailed logging."""
+        directories = [
+            # Configuration directories
+            "rules",
+            
+            # Input data directories
+            "inputs/sales_data",
+            "inputs/inventory_data", 
+            "inputs/weekly_reports",
+            
+            # Processing directories
+            DUPLICATES_ROOT_DIR,
+            DUPLICATES_TO_PROCESS_DIR,
+            DUPLICATES_PROCESSED_DIR,
+            FORMAT_CONFLICT_DIR,
+            FORMAT_CONFLICT_TO_PROCESS_DIR,
+            FORMAT_CONFLICT_PROCESSED_DIR,
+            
+            # Failed rows directories
+            FAILED_ROWS_DIR,
+            FAILED_ROWS_TO_PROCESS_DIR,
+            FAILED_ROWS_PROCESSED_DIR,
 
-        # Log directory (already created in setup_logging, but ensure it exists)
-        os.makedirs(LOG_DIR, exist_ok=True)
+            # Log directory
+            LOG_DIR
+        ]
+
+        for directory in directories:
+            try:
+                os.makedirs(directory, exist_ok=True)
+                logger.debug(f"Directory created/verified: {directory}")
+            except OSError as e:
+                logger.error(f"Failed to create directory {directory}: {e} (errno: {e.errno})")
+                raise
+
+        logger.info("Directory structure created successfully")
 
     # ---------------------------
-    # Locking - IMPROVED
+    # Enhanced Locking with detailed OS logging
     # ---------------------------
     def _acquire_lock(self):
-        """Prevent multiple concurrent runs with lock file - IMPROVED"""
+        """Prevent multiple concurrent runs with lock file - ENHANCED with detailed OS logging"""
         max_attempts = 5
         attempt = 0
+        
+        logger.info(f"Attempting to acquire lock (timeout: {self.config.lock_timeout}s, max_attempts: {max_attempts})")
         
         while attempt < max_attempts:
             if os.path.exists(LOCK_FILE):
                 try:
                     lock_time = os.path.getmtime(LOCK_FILE)
                     current_time = time.time()
+                    lock_age = current_time - lock_time
+                    
+                    logger.debug(f"Lock file exists: {LOCK_FILE}, age: {lock_age:.1f}s, timeout: {self.config.lock_timeout}s")
                     
                     # Check if lock is stale (older than timeout)
-                    if current_time - lock_time < self.config.lock_timeout:
+                    if lock_age < self.config.lock_timeout:
                         # Check if the process that created the lock is still running
                         try:
                             with open(LOCK_FILE, 'r') as f:
@@ -877,45 +1011,45 @@ class PostgresLoader:
                                         os.kill(pid, 0)  # This will raise OSError if process doesn't exist
                                         # Process is still running
                                         if attempt == max_attempts - 1:
-                                            logger.error("Another instance is running and lock is still valid. Exiting.")
+                                            logger.error(f"Another instance is running (PID: {pid}) and lock is still valid. Exiting.")
                                             sys.exit(0)
                                         else:
                                             logger.warning(f"Another instance is running (PID: {pid}). Waiting... (Attempt {attempt + 1}/{max_attempts})")
                                             time.sleep(2)
                                             attempt += 1
                                             continue
-                                    except OSError:
+                                    except OSError as e:
                                         # Process doesn't exist - stale lock
-                                        logger.warning("Stale lock file detected (process not running). Removing.")
+                                        logger.warning(f"Stale lock file detected (process {pid} not running, errno: {e.errno}). Removing.")
                                         os.remove(LOCK_FILE)
-                        except (IOError, ValueError):
+                        except (IOError, ValueError) as e:
                             # Lock file is corrupt or empty
-                            logger.warning("Corrupt lock file detected. Removing.")
+                            logger.warning(f"Corrupt lock file detected: {e}. Removing.")
                             os.remove(LOCK_FILE)
                     else:
                         # Lock file is too old
-                        logger.warning("Stale lock file detected (timeout exceeded). Removing.")
+                        logger.warning(f"Stale lock file detected (age: {lock_age:.1f}s > timeout: {self.config.lock_timeout}s). Removing.")
                         os.remove(LOCK_FILE)
                 except OSError as e:
-                    logger.warning(f"Error checking lock file: {e}. Removing stale lock.")
+                    logger.warning(f"Error checking lock file {LOCK_FILE}: {e} (errno: {e.errno}). Removing stale lock.")
                     try:
                         os.remove(LOCK_FILE)
-                    except:
-                        pass
+                    except OSError as remove_error:
+                        logger.error(f"Failed to remove lock file: {remove_error} (errno: {remove_error.errno})")
 
             # Try to create lock file
             try:
                 with open(LOCK_FILE, 'w') as f:
                     f.write(str(os.getpid()))
                 self.lock_acquired = True
-                logger.info(f"Lock acquired for run {self.run_id}")
+                logger.info(f"Lock acquired for run {self.run_id} (PID: {os.getpid()})")
                 return
             except IOError as e:
                 if attempt == max_attempts - 1:
-                    logger.error(f"Failed to acquire lock after {max_attempts} attempts: {e}")
+                    logger.error(f"Failed to acquire lock after {max_attempts} attempts: {e} (errno: {e.errno})")
                     raise
                 else:
-                    logger.warning(f"Could not acquire lock (attempt {attempt + 1}/{max_attempts}): {e}")
+                    logger.warning(f"Could not acquire lock (attempt {attempt + 1}/{max_attempts}): {e} (errno: {e.errno})")
                     time.sleep(1)
                     attempt += 1
 
@@ -923,7 +1057,7 @@ class PostgresLoader:
         sys.exit(1)
 
     def _release_lock(self):
-        """Clean up lock file on exit - IMPROVED"""
+        """Clean up lock file on exit - ENHANCED with detailed OS logging"""
         if self.lock_acquired:
             try:
                 if os.path.exists(LOCK_FILE):
@@ -936,12 +1070,12 @@ class PostgresLoader:
                             logger.info("Lock released successfully")
                         else:
                             logger.warning(f"Lock file owned by different process (PID: {lock_pid}), not removing")
-                    except (IOError, ValueError):
-                        logger.warning("Could not read lock file, removing anyway")
+                    except (IOError, ValueError) as e:
+                        logger.warning(f"Could not read lock file: {e}, removing anyway")
                         os.remove(LOCK_FILE)
                 self.lock_acquired = False
             except Exception as e:
-                logger.error(f"Error releasing lock: {e}")
+                logger.error(f"Error releasing lock: {type(e).__name__}: {e}")
 
     def cleanup(self):
         """Explicit cleanup method"""
@@ -951,6 +1085,7 @@ class PostgresLoader:
     # Configuration / Rules Loading
     # ---------------------------
     def _load_global_config(self, config_file: str) -> ProcessingConfig:
+        logger.info(f"Loading global configuration from: {config_file}")
         if os.path.exists(config_file):
             try:
                 with open(config_file, 'r') as f:
@@ -958,11 +1093,13 @@ class PostgresLoader:
                         config_data = yaml.safe_load(f)
                     else:
                         config_data = json.load(f)
+                logger.info(f"Successfully loaded global configuration from {config_file}")
                 return ProcessingConfig(**config_data)
             except Exception as e:
-                logger.warning(f"Could not load global config: {e}")
+                logger.warning(f"Could not load global config {config_file}: {e}")
 
         # Return default config if file doesn't exist or can't be loaded
+        logger.info("Using default configuration")
         return ProcessingConfig()
 
     def _load_processing_rules(self, rules_folder: str) -> List[FileProcessingRule]:
@@ -972,10 +1109,14 @@ class PostgresLoader:
             return []
 
         rules = []
-        for rule_file_path in rules_folder_path.iterdir():
+        rule_files = list(rules_folder_path.iterdir())
+        logger.info(f"Found {len(rule_files)} files in rules folder")
+        
+        for rule_file_path in rule_files:
             if rule_file_path.is_file() and rule_file_path.name.endswith("_rule.yaml"):
                 try:
                     base_name = rule_file_path.stem.replace("_rule", "")
+                    logger.debug(f"Loading rule from: {rule_file_path}")
                     with open(rule_file_path, 'r') as f:
                         rule_data = yaml.safe_load(f)
 
@@ -1005,59 +1146,10 @@ class PostgresLoader:
                     rules.append(rule)
                     logger.info(f"Loaded rule '{base_name}' with directory: {rule.directory}, mapping: {rule.mapping_file}")
                 except Exception as e:
-                    logger.error(f"Failed to load rule: {e}")
+                    logger.error(f"Failed to load rule from {rule_file_path}: {e}")
 
+        logger.info(f"Successfully loaded {len(rules)} processing rules")
         return rules
-
-    # ---------------------------
-    # Pattern extraction helpers
-    # ---------------------------
-    @staticmethod
-    def extract_pattern_and_date_format(filename: str) -> Tuple[Optional[str], Optional[str]]:
-        date_patterns = [
-            (r'(\d{4})(\d{2})(\d{2})', '%Y%m%d'),
-            (r'(\d{2})(\d{2})(\d{2})', '%m%d%y'),
-            (r'(\d{2})(\d{2})(\d{4})', '%m%d%Y'),
-            (r'(\d{4})-(\d{2})-(\d{2})', '%Y-%m-%d'),
-            (r'(\d{2})-(\d{2})-(\d{4})', '%m-%d-%Y'),
-            (r'(\d{2})/(\d{2})/(\d{4})', '%m/%d/%Y'),
-            (r'(\d{2})(\d{2})(\d{2})', '%d%m%y'),
-            (r'(\d{2})(\d{2})(\d{4})', '%d%m%Y'),
-        ]
-
-        for date_regex, date_format in date_patterns:
-            match = re.search(date_regex, filename)
-            if match:
-                date_str = ''.join(match.groups())
-                try:
-                    clean_format = date_format.replace('-', '').replace('/', '')
-                    datetime.strptime(date_str, clean_format)
-
-                    pattern = re.sub(date_regex, r'(\d{' + r'\d{'.join([str(len(g)) for g in match.groups()]) + '})', filename)
-                    pattern = re.sub(r'([^a-zA-Z0-9\(\)])', r'\\\1', pattern)
-                    pattern = '^' + pattern + '$'
-                    return pattern, date_format
-                except ValueError:
-                    continue
-
-        return None, None
-
-    @staticmethod
-    def test_pattern_on_filename(pattern: str, filename: str, date_format: Optional[str] = None) -> bool:
-        match = re.match(pattern, filename)
-        if not match:
-            return False
-
-        if date_format and match.groups():
-            date_str = ''.join(match.groups())
-            try:
-                clean_format = date_format.replace('-', '').replace('/', '')
-                datetime.strptime(date_str, clean_format)
-                return True
-            except ValueError:
-                return False
-
-        return True
 
     # ---------------------------
     # Column name sanitization & type inference
@@ -1116,8 +1208,11 @@ class PostgresLoader:
         for rule in self.processing_rules:
             rule_source_dir = Path(rule.directory)
             if not rule_source_dir.exists():
-                rule_source_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Created directory: {rule_source_dir}")
+                try:
+                    rule_source_dir.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"Created directory: {rule_source_dir}")
+                except OSError as e:
+                    logger.error(f"Failed to create directory {rule_source_dir}: {e}")
 
             mapping_filepath = Path(rule.mapping_file)
 
@@ -1150,10 +1245,13 @@ class PostgresLoader:
 
         logger.info("Setup validation completed")
 
+    @log_os_operations
     def _generate_mapping_file(self, source_filepath: Path, mapping_filepath: Path,
                               start_row: int = 0, start_col: int = 0, 
                               sheet_config: Dict[str, Any] = None):
         try:
+            logger.info(f"Generating mapping file: {mapping_filepath} from sample: {source_filepath}")
+            
             # For Excel files with sheet config, sample from appropriate sheet
             if source_filepath.suffix.lower() in ['.xlsx', '.xls'] and sheet_config:
                 processing_method = sheet_config.get('processing_method', 'specific')
@@ -1248,7 +1346,7 @@ class PostgresLoader:
             mapping_df.to_csv(mapping_filepath, index=False)
             logger.info(f"Created mapping file with intelligent defaults: {mapping_filepath}")
         except Exception as e:
-            logger.error(f"Mapping generation failed: {e}")
+            logger.error(f"Mapping generation failed for {source_filepath}: {e}")
             pd.DataFrame(columns=[
                 'RawColumn', 'TargetColumn', 'DataType', 'LoadFlag', 'IndexColumn',
                 'data_source', 'definition', 'order'
@@ -1268,7 +1366,7 @@ class PostgresLoader:
         if not new_cols:
             return False
 
-        logger.warning(f"New columns detected: {', '.join(new_cols)}")
+        logger.warning(f"New columns detected in {file_context.filename}: {', '.join(new_cols)}")
 
         col_positions = {col: idx for idx, col in enumerate(current_cols)}
 
@@ -1295,7 +1393,7 @@ class PostgresLoader:
         updated_df = updated_df.sort_values('order')
 
         updated_df.to_csv(file_context.mapping_filepath, index=False)
-        logger.info(f"Updated mapping file with new columns at correct positions")
+        logger.info(f"Updated mapping file with {len(new_cols)} new columns at correct positions")
 
         configured_new_cols = []
         for _, row in updated_df.iterrows():
@@ -1363,6 +1461,8 @@ class PostgresLoader:
             (mapping['LoadFlag'] == 'Y')
         ]
 
+        logger.debug(f"Validating data types for {len(df)} rows in {filename}")
+
         for index, row in df.iterrows():
             has_conflict = False
             conflict_details = []
@@ -1403,10 +1503,13 @@ class PostgresLoader:
         clean_df = pd.DataFrame(clean_rows) if clean_rows else pd.DataFrame()
         conflict_df = pd.DataFrame(conflict_rows) if conflict_rows else pd.DataFrame()
 
+        if len(conflict_df) > 0:
+            logger.warning(f"Found {len(conflict_df)} format conflicts in {filename}")
+
         return clean_df, conflict_df
 
     # ---------------------------
-    # Export helpers - ENHANCED: Use same file format as original
+    # Export helpers - ENHANCED: Use same file format as original with OS logging
     # ---------------------------
     def _get_conflict_guidance(self, conflict_type: str) -> str:
         guidance = {
@@ -1450,7 +1553,10 @@ class PostgresLoader:
     def _export_duplicates(self, conflict_df: pd.DataFrame, file_context: FileContext):
         """Export duplicates using the same file format as the original file."""
         dup_dir = Path(DUPLICATES_ROOT_DIR)
-        dup_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dup_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Failed to create duplicates directory {dup_dir}: {e}")
 
         export_filename = self._get_export_filename(file_context.filename, file_context.filepath.suffix)
         export_path = dup_dir / export_filename
@@ -1521,9 +1627,12 @@ class PostgresLoader:
         name_without_ext = Path(original_filename).stem
         return f"{name_without_ext}{original_suffix}"
 
+    @log_os_operations
     def _save_dataframe_by_format(self, df: pd.DataFrame, filepath: Path, original_suffix: str):
-        """Save dataframe using the same format as the original file."""
+        """Save dataframe using the same format as the original file with enhanced error handling."""
         file_ext = original_suffix.lower()
+        
+        logger.info(f"Saving dataframe to {filepath} (format: {file_ext}, rows: {len(df)}, columns: {len(df.columns)})")
         
         try:
             if file_ext == '.csv':
@@ -1536,13 +1645,21 @@ class PostgresLoader:
                 df.to_json(filepath, orient='records', indent=2)
             else:
                 # Default to CSV for unknown formats
-                df.to_csv(filepath.with_suffix('.csv'), index=False)
-                logger.warning(f"Unknown file format {file_ext}, exported as CSV instead")
+                fallback_path = filepath.with_suffix('.csv')
+                df.to_csv(fallback_path, index=False)
+                logger.warning(f"Unknown file format {file_ext}, exported as CSV instead: {fallback_path}")
+                
+            logger.info(f"Successfully saved {len(df)} rows to {filepath}")
+            
         except Exception as e:
-            logger.error(f"Error exporting to {filepath}: {e}")
+            logger.error(f"Error exporting to {filepath}: {type(e).__name__}: {e}")
             # Fallback to CSV
-            df.to_csv(filepath.with_suffix('.csv'), index=False)
-            logger.info(f"Exported as CSV fallback: {filepath.with_suffix('.csv')}")
+            try:
+                fallback_path = filepath.with_suffix('.csv')
+                df.to_csv(fallback_path, index=False)
+                logger.info(f"Exported as CSV fallback: {fallback_path}")
+            except Exception as fallback_error:
+                logger.error(f"CSV fallback also failed: {fallback_error}")
 
     def _get_failure_reason(self, error_message: str) -> str:
         """Convert database errors to user-friendly reasons."""
@@ -1774,11 +1891,14 @@ class PostgresLoader:
         return error_code in retryable_codes
 
     # ---------------------------
-    # Files discovery - CORRECTED: Search in to_process directories
+    # Enhanced file discovery with OS logging
     # ---------------------------
     def get_files_to_process(self) -> List[FileContext]:
         all_potential_file_contexts = []
+        search_locations = []
 
+        logger.info("Starting file discovery process")
+        
         for rule in self.processing_rules:
             rule_source_dir = Path(rule.directory)
             if not rule_source_dir.exists():
@@ -1790,11 +1910,14 @@ class PostgresLoader:
                 logger.warning(f"Mapping file not found: {mapping_filepath}")
                 continue
 
+            search_locations.append(f"Rule '{rule.base_name}': {rule.directory} (subdirectories: {rule.search_subdirectories})")
+
             if rule.search_subdirectories:
                 search_pattern = rule_source_dir.rglob('*')
             else:
                 search_pattern = rule_source_dir.iterdir()
 
+            files_found = 0
             for file_path in search_pattern:
                 if (file_path.is_file() and
                         file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json'] and
@@ -1804,6 +1927,7 @@ class PostgresLoader:
                     match = rule.match(filename)
 
                     if match:
+                        files_found += 1
                         extracted_timestamp = ""
                         if rule.date_format and match.groups():
                             try:
@@ -1830,156 +1954,85 @@ class PostgresLoader:
                             sheet_config=rule.sheet_config
                         )
                         all_potential_file_contexts.append(file_context)
+            
+            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files")
 
-        # CORRECTED: Search in duplicates/to_process/
-        duplicates_to_process_dir = Path(DUPLICATES_TO_PROCESS_DIR)
-        if duplicates_to_process_dir.exists() and duplicates_to_process_dir.is_dir():
-            for file_path in duplicates_to_process_dir.iterdir():
-                if (file_path.is_file() and
-                        file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']):
+        # Search in special processing directories with enhanced logging
+        special_dirs = [
+            (DUPLICATES_TO_PROCESS_DIR, "duplicates", "is_duplicate"),
+            (FORMAT_CONFLICT_TO_PROCESS_DIR, "format_conflict", "is_format_conflict"), 
+            (FAILED_ROWS_TO_PROCESS_DIR, "failed_rows", "is_failed_row")
+        ]
 
-                    filename = file_path.name
-                    matching_rule = None
-                    for rule in self.processing_rules:
-                        match = rule.match(filename)
-                        if match:
-                            matching_rule = rule
-                            break
+        for dir_path, category, attr_name in special_dirs:
+            special_dir = Path(dir_path)
+            if special_dir.exists() and special_dir.is_dir():
+                files_in_dir = list(special_dir.iterdir())
+                logger.info(f"Checking {category} directory: {dir_path} ({len(files_in_dir)} files)")
+                
+                for file_path in files_in_dir:
+                    if (file_path.is_file() and
+                            file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']):
 
-                    if matching_rule:
-                        mapping_filepath = Path(matching_rule.mapping_file)
+                        filename = file_path.name
+                        matching_rule = None
+                        for rule in self.processing_rules:
+                            match = rule.match(filename)
+                            if match:
+                                matching_rule = rule
+                                break
 
-                        extracted_timestamp = ""
-                        if matching_rule.date_format and match.groups():
-                            try:
-                                date_str = "".join(match.groups())
-                                datetime.strptime(date_str, matching_rule.date_format)
-                                extracted_timestamp = date_str
-                            except ValueError:
-                                pass
+                        if matching_rule:
+                            mapping_filepath = Path(matching_rule.mapping_file)
 
-                        file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
+                            extracted_timestamp = ""
+                            if matching_rule.date_format and match.groups():
+                                try:
+                                    date_str = "".join(match.groups())
+                                    datetime.strptime(date_str, matching_rule.date_format)
+                                    extracted_timestamp = date_str
+                                except ValueError:
+                                    pass
 
-                        file_context = FileContext(
-                            filepath=file_path,
-                            filename=filename,
-                            target_table=matching_rule.target_table,
-                            mapping_filepath=mapping_filepath,
-                            extracted_timestamp_str=extracted_timestamp,
-                            file_modified_timestamp=file_modified,
-                            start_row=matching_rule.start_row or self.global_start_row,
-                            start_col=matching_rule.start_col or self.global_start_col,
-                            mode=matching_rule.mode or "insert",
-                            date_from_filename_col_name=matching_rule.date_from_filename_col_name,
-                            hash_exclude_columns=matching_rule.hash_exclude_columns,
-                            sheet_config=matching_rule.sheet_config,
-                            is_duplicate=True
-                        )
-                        all_potential_file_contexts.append(file_context)
+                            file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
 
-        # CORRECTED: Search in format_conflict/to_process/
-        format_conflict_to_process_dir = Path(FORMAT_CONFLICT_TO_PROCESS_DIR)
-        if format_conflict_to_process_dir.exists() and format_conflict_to_process_dir.is_dir():
-            for file_path in format_conflict_to_process_dir.iterdir():
-                if (file_path.is_file() and
-                        file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']):
-
-                    filename = file_path.name
-                    matching_rule = None
-                    for rule in self.processing_rules:
-                        match = rule.match(filename)
-                        if match:
-                            matching_rule = rule
-                            break
-
-                    if matching_rule:
-                        mapping_filepath = Path(matching_rule.mapping_file)
-
-                        extracted_timestamp = ""
-                        if matching_rule.date_format and match.groups():
-                            try:
-                                date_str = "".join(match.groups())
-                                datetime.strptime(date_str, matching_rule.date_format)
-                                extracted_timestamp = date_str
-                            except ValueError:
-                                pass
-
-                        file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
-
-                        file_context = FileContext(
-                            filepath=file_path,
-                            filename=filename,
-                            target_table=matching_rule.target_table,
-                            mapping_filepath=mapping_filepath,
-                            extracted_timestamp_str=extracted_timestamp,
-                            file_modified_timestamp=file_modified,
-                            start_row=matching_rule.start_row or self.global_start_row,
-                            start_col=matching_rule.start_col or self.global_start_col,
-                            mode=matching_rule.mode or "insert",
-                            date_from_filename_col_name=matching_rule.date_from_filename_col_name,
-                            hash_exclude_columns=matching_rule.hash_exclude_columns,
-                            sheet_config=matching_rule.sheet_config,
-                            is_format_conflict=True
-                        )
-                        all_potential_file_contexts.append(file_context)
-
-        # CORRECTED: Search in failed_rows/to_process/
-        failed_rows_to_process_dir = Path(FAILED_ROWS_TO_PROCESS_DIR)
-        if failed_rows_to_process_dir.exists() and failed_rows_to_process_dir.is_dir():
-            for file_path in failed_rows_to_process_dir.iterdir():
-                if (file_path.is_file() and
-                        file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']):
-
-                    filename = file_path.name
-                    matching_rule = None
-                    for rule in self.processing_rules:
-                        match = rule.match(filename)
-                        if match:
-                            matching_rule = rule
-                            break
-
-                    if matching_rule:
-                        mapping_filepath = Path(matching_rule.mapping_file)
-
-                        extracted_timestamp = ""
-                        if matching_rule.date_format and match.groups():
-                            try:
-                                date_str = "".join(match.groups())
-                                datetime.strptime(date_str, matching_rule.date_format)
-                                extracted_timestamp = date_str
-                            except ValueError:
-                                pass
-
-                        file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
-
-                        file_context = FileContext(
-                            filepath=file_path,
-                            filename=filename,
-                            target_table=matching_rule.target_table,
-                            mapping_filepath=mapping_filepath,
-                            extracted_timestamp_str=extracted_timestamp,
-                            file_modified_timestamp=file_modified,
-                            start_row=matching_rule.start_row or self.global_start_row,
-                            start_col=matching_rule.start_col or self.global_start_col,
-                            mode=matching_rule.mode or "insert",
-                            date_from_filename_col_name=matching_rule.date_from_filename_col_name,
-                            hash_exclude_columns=matching_rule.hash_exclude_columns,
-                            sheet_config=matching_rule.sheet_config,
-                            is_failed_row=True
-                        )
-                        all_potential_file_contexts.append(file_context)
+                            file_context = FileContext(
+                                filepath=file_path,
+                                filename=filename,
+                                target_table=matching_rule.target_table,
+                                mapping_filepath=mapping_filepath,
+                                extracted_timestamp_str=extracted_timestamp,
+                                file_modified_timestamp=file_modified,
+                                start_row=matching_rule.start_row or self.global_start_row,
+                                start_col=matching_rule.start_col or self.global_start_col,
+                                mode=matching_rule.mode or "insert",
+                                date_from_filename_col_name=matching_rule.date_from_filename_col_name,
+                                hash_exclude_columns=matching_rule.hash_exclude_columns,
+                                sheet_config=matching_rule.sheet_config
+                            )
+                            setattr(file_context, attr_name, True)
+                            all_potential_file_contexts.append(file_context)
+                            logger.debug(f"Found {category} file: {filename}")
+            else:
+                logger.debug(f"{category} directory not found or not accessible: {dir_path}")
 
         # Filter based on progress tracker and audit checks
         files_to_process = []
+        skipped_files = 0
+        
+        logger.info(f"Found {len(all_potential_file_contexts)} total potential files, applying filters...")
+
         for fc in all_potential_file_contexts:
             if any([fc.is_duplicate, getattr(fc, 'is_format_conflict', False), getattr(fc, 'is_failed_row', False)]):
                 files_to_process.append(fc)
+                logger.debug(f"Including {fc.filename} (special processing file)")
                 continue
 
             if self.progress_tracker:
                 needs_processing = self.progress_tracker.needs_processing(fc.filepath, fc)
                 if not needs_processing:
                     logger.info(f"Skipping unchanged file: {fc.filename}")
+                    skipped_files += 1
                     continue
 
             if fc.mode == "audit" and not any([fc.is_duplicate, getattr(fc, 'is_format_conflict', False), getattr(fc, 'is_failed_row', False)]):
@@ -1988,33 +2041,41 @@ class PostgresLoader:
                         logger.info(f"Skipping {fc.filename}: Content unchanged in database")
                         if self.progress_tracker:
                             self.progress_tracker.mark_processed(fc.filepath, fc)
+                        skipped_files += 1
                         continue
                 except Exception as e:
-                    logger.error(f"Audit check failed: {e}")
+                    logger.error(f"Audit check failed for {fc.filename}: {e}")
 
             files_to_process.append(fc)
 
-        logger.info(f"Files to process: {len(files_to_process)}")
+        logger.info(f"File discovery completed: {len(files_to_process)} to process, {skipped_files} skipped")
         return files_to_process
 
     # ---------------------------
-    # Processing loop - ENHANCED: Consistent file movement to processed folders
+    # Enhanced processing with detailed OS logging
     # ---------------------------
     def process_files(self) -> Dict[str, int]:
         start_time = time.time()
         logger.info(f"=== STARTING RUN {self.run_id} ===")
+        logger.info(f"Configuration: batch_size={self.config.batch_size}, delete_files={self.delete_files}")
 
         file_contexts = self.get_files_to_process()
         processed, failed = 0, 0
 
-        for fc in file_contexts:
+        logger.info(f"Processing {len(file_contexts)} files...")
+
+        for i, fc in enumerate(file_contexts):
+            logger.info(f"Processing file {i+1}/{len(file_contexts)}: {fc.filename}")
             if self.process_file(fc):
                 processed += 1
+                logger.info(f"Successfully processed: {fc.filename}")
             else:
                 failed += 1
+                logger.error(f"Failed to process: {fc.filename}")
 
         duration = time.time() - start_time
         logger.info(f"Run completed. Processed: {processed}, Failed: {failed}, Duration: {duration:.1f}s")
+        logger.info(f"=== RUN {self.run_id} COMPLETED ===")
 
         return {"processed": processed, "failed": failed}
 
@@ -2373,12 +2434,19 @@ class PostgresLoader:
         return self._process_dataframe(df, file_context)
 
     # ---------------------------
-    # Utility methods - ENHANCED: Better file movement
+    # Utility methods - ENHANCED: Better file movement with OS logging
     # ---------------------------
+    @log_os_operations
     def _move_to_processed(self, filepath: Path, category: str):
-        """Move file to processed directory with consistent naming."""
+        """Move file to processed directory with consistent naming and enhanced error handling."""
         processed_dir = Path(f"{category}/processed")
-        processed_dir.mkdir(exist_ok=True)
+        
+        try:
+            processed_dir.mkdir(exist_ok=True)
+            logger.debug(f"Verified processed directory: {processed_dir}")
+        except OSError as e:
+            logger.error(f"Failed to create processed directory {processed_dir}: {e} (errno: {e.errno})")
+            return
         
         try:
             # Add timestamp to avoid name conflicts
@@ -2386,35 +2454,46 @@ class PostgresLoader:
             new_name = f"{filepath.stem}_{timestamp}{filepath.suffix}"
             new_path = processed_dir / new_name
             
+            logger.info(f"Moving {category} file: {filepath} -> {new_path}")
             shutil.move(str(filepath), str(new_path))
-            logger.info(f"Moved {category} file to processed: {new_path}")
+            logger.info(f"Successfully moved {category} file to processed: {new_path}")
+        except OSError as e:
+            logger.error(f"Could not move file {filepath} to processed directory: {e} (errno: {e.errno})")
         except Exception as e:
-            logger.warning(f"Could not move file to processed directory: {e}")
+            logger.error(f"Unexpected error moving file {filepath}: {type(e).__name__}: {e}")
 
 # ===========================
-# Utilities: create sample configs & files
+# Enhanced utilities with OS logging
 # ===========================
+@log_os_operations
 def create_sample_configs():
-    """Create sample configuration files with organized directory structure."""
-    # Create organized directory structure
-    os.makedirs("rules", exist_ok=True)
-    os.makedirs("inputs/sales_data", exist_ok=True)
-    os.makedirs("inputs/inventory_data", exist_ok=True)
-    os.makedirs("inputs/weekly_reports", exist_ok=True)
-    os.makedirs(DUPLICATES_ROOT_DIR, exist_ok=True)
-    os.makedirs(DUPLICATES_TO_PROCESS_DIR, exist_ok=True)
-    os.makedirs(DUPLICATES_PROCESSED_DIR, exist_ok=True)
-    os.makedirs(FORMAT_CONFLICT_DIR, exist_ok=True)
-    os.makedirs(FORMAT_CONFLICT_TO_PROCESS_DIR, exist_ok=True)
-    os.makedirs(FORMAT_CONFLICT_PROCESSED_DIR, exist_ok=True)
+    """Create sample configuration files with organized directory structure and enhanced logging."""
+    logger.info("Creating sample configuration files...")
     
-    # Failed rows directories
-    os.makedirs(FAILED_ROWS_DIR, exist_ok=True)
-    os.makedirs(FAILED_ROWS_TO_PROCESS_DIR, exist_ok=True)
-    os.makedirs(FAILED_ROWS_PROCESSED_DIR, exist_ok=True)
+    # Create organized directory structure
+    directories = [
+        "rules",
+        "inputs/sales_data", 
+        "inputs/inventory_data",
+        "inputs/weekly_reports",
+        DUPLICATES_ROOT_DIR,
+        DUPLICATES_TO_PROCESS_DIR,
+        DUPLICATES_PROCESSED_DIR,
+        FORMAT_CONFLICT_DIR,
+        FORMAT_CONFLICT_TO_PROCESS_DIR,
+        FORMAT_CONFLICT_PROCESSED_DIR,
+        FAILED_ROWS_DIR,
+        FAILED_ROWS_TO_PROCESS_DIR,
+        FAILED_ROWS_PROCESSED_DIR,
+        LOG_DIR
+    ]
 
-    # Log directory
-    os.makedirs(LOG_DIR, exist_ok=True)
+    for directory in directories:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            logger.debug(f"Created directory: {directory}")
+        except OSError as e:
+            logger.error(f"Failed to create directory {directory}: {e} (errno: {e.errno})")
 
     if not os.path.exists(GLOBAL_CONFIG_FILE):
         global_config = {
@@ -2561,58 +2640,49 @@ def create_sample_configs():
             logger.info(f"Created sample weekly report file with multiple sheets: {sample_weekly_file}")
 
 # ===========================
-# Main entrypoint
+# Enhanced main entrypoint with OS error handling
 # ===========================
 if __name__ == "__main__":
-    # Remove stale lock if older than lock_timeout (conservative)
+    # Enhanced stale lock detection with logging
     if os.path.exists(LOCK_FILE):
         try:
             lock_age = time.time() - os.path.getmtime(LOCK_FILE)
             if lock_age > 3600:
+                logger.warning(f"Removing stale lock file (age: {lock_age:.1f}s)")
                 os.remove(LOCK_FILE)
                 print("Removed stale lock file")
-        except Exception:
-            pass
-
-    if len(sys.argv) > 1 and sys.argv[1] == "--extract-pattern":
-        if len(sys.argv) < 3:
-            print("Usage: python script.py --extract-pattern <filename>")
-            sys.exit(1)
-
-        filename = sys.argv[2]
-        pattern, date_format = PostgresLoader.extract_pattern_and_date_format(filename)
-
-        if pattern and date_format:
-            print(f"Filename: {filename}")
-            print(f"Suggested pattern: {pattern}")
-            print(f"Suggested date format: {date_format}")
-            is_valid = PostgresLoader.test_pattern_on_filename(pattern, filename, date_format)
-            print(f"Pattern validation: {'✓ PASS' if is_valid else '✗ FAIL'}")
-        else:
-            print(f"Could not extract pattern from: {filename}")
-        sys.exit(0)
-
-    # NEW: Only create sample configs if explicitly enabled or first run
-    config_exists = os.path.exists(GLOBAL_CONFIG_FILE)
-    
-    if not config_exists:
-        # First run - create sample configs
-        create_sample_configs()
-    else:
-        # Check if sample generation is enabled in config
-        try:
-            with open(GLOBAL_CONFIG_FILE, 'r') as f:
-                config_data = yaml.safe_load(f)
-                generate_samples = config_data.get('generate_sample_files', False)
-                
-            if generate_samples:
-                create_sample_configs()
-            else:
-                logger.info("Sample file generation is disabled in config")
         except Exception as e:
-            logger.warning(f"Could not read config to check sample generation setting: {e}")
+            print(f"Error checking lock file: {e}")
 
     try:
+        # Remove pattern extraction functionality completely
+        # If user tries to use pattern extraction, direct them to the utility script
+        if len(sys.argv) > 1 and any(arg in sys.argv for arg in ['--extract-pattern', '--pattern', '-p']):
+            print("Pattern extraction has been moved to a separate utility script.")
+            print("Please use: python pattern_utils.py <filename1> [filename2 ...]")
+            print("Example: python pattern_utils.py ghy_20250505.xlsx")
+            sys.exit(1)
+
+        # NEW: Only create sample configs if explicitly enabled or first run
+        config_exists = os.path.exists(GLOBAL_CONFIG_FILE)
+        
+        if not config_exists:
+            # First run - create sample configs
+            create_sample_configs()
+        else:
+            # Check if sample generation is enabled in config
+            try:
+                with open(GLOBAL_CONFIG_FILE, 'r') as f:
+                    config_data = yaml.safe_load(f)
+                    generate_samples = config_data.get('generate_sample_files', False)
+                    
+                if generate_samples:
+                    create_sample_configs()
+                else:
+                    logger.info("Sample file generation is disabled in config")
+            except Exception as e:
+                logger.warning(f"Could not read config to check sample generation setting: {e}")
+
         loader = PostgresLoader(
             global_config_file=GLOBAL_CONFIG_FILE,
             rules_folder_path='rules'
@@ -2620,6 +2690,13 @@ if __name__ == "__main__":
 
         result = loader.process_files()
         print(f"Processed: {result['processed']}, Failed: {result['failed']}")
+        
+    except KeyboardInterrupt:
+        logger.info("Processing interrupted by user")
+        print("Processing interrupted by user")
+        sys.exit(1)
     except Exception as e:
+        logger.critical(f"Fatal error during processing: {type(e).__name__}: {e}")
         print(f"Processing failed: {e}")
         print("Check processing.log for details")
+        sys.exit(1)
