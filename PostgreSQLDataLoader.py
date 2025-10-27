@@ -224,8 +224,9 @@ class FileProcessingRule:
         errors = []
         if not self.directory:
             errors.append("Directory is required")
-        if not self.directory.startswith('inputs/'):
-            errors.append("Directory should be under inputs/ folder")
+        # REMOVED: Directory under inputs/ validation to allow flexible directory structures
+        # if not self.directory.startswith('inputs/'):
+        #     errors.append("Directory should be under inputs/ folder")
         if not self.file_pattern:
             errors.append("File pattern is required")
         if self.mode and self.mode not in ["cancel_and_replace", "audit", "insert"]:
