@@ -65,6 +65,8 @@ METADATA_COLUMNS = {
 # ===========================
 def setup_logging():
     """Setup logging with timestamped log files in logs directory with enhanced OS error details."""
+    global LOG_DIR  # ← FIX: Declare global at the top
+    
     # Create logs directory if it doesn't exist
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -72,7 +74,6 @@ def setup_logging():
     except OSError as e:
         print(f"CRITICAL: Failed to create log directory {LOG_DIR}: {e}")
         # Fallback to current directory
-        global LOG_DIR
         LOG_DIR = "."
         print(f"Using fallback log directory: {LOG_DIR}")
     
