@@ -65,7 +65,7 @@ METADATA_COLUMNS = {
 # ===========================
 def setup_logging():
     """Setup logging with timestamped log files in logs directory with enhanced OS error details."""
-    global LOG_DIR  # ← FIX: Declare global at the top
+    global LOG_DIR
     
     # Create logs directory if it doesn't exist
     try:
@@ -1893,7 +1893,7 @@ class PostgresLoader:
         return error_code in retryable_codes
 
     # ---------------------------
-    # Enhanced file discovery with OS logging
+    # Enhanced file discovery with OS logging - FIXED PATTERN FILTERING
     # ---------------------------
     def get_files_to_process(self) -> List[FileContext]:
         all_potential_file_contexts = []
@@ -1928,6 +1928,7 @@ class PostgresLoader:
                     filename = file_path.name
                     match = rule.match(filename)
 
+                    # FIX: Only include files that match the pattern
                     if match:
                         files_found += 1
                         extracted_timestamp = ""
@@ -1956,8 +1957,10 @@ class PostgresLoader:
                             sheet_config=rule.sheet_config
                         )
                         all_potential_file_contexts.append(file_context)
+                    else:
+                        logger.debug(f"Skipping file '{filename}' - does not match pattern '{rule.file_pattern}'")
             
-            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files")
+            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files (pattern: '{rule.file_pattern}')")
 
         # Search in special processing directories with enhanced logging
         special_dirs = [
