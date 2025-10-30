@@ -1203,10 +1203,13 @@ class PostgresLoader:
         return 'TEXT'
 
     # ---------------------------
-    # Setup validation & mapping generation
+    # Setup validation & mapping generation - FIXED VERSION
     # ---------------------------
     def _validate_setup(self) -> None:
         logger.info("Validating setup with organized directory structure...")
+        
+        valid_rules = []
+        
         for rule in self.processing_rules:
             rule_source_dir = Path(rule.directory)
             if not rule_source_dir.exists():
@@ -1219,10 +1222,12 @@ class PostgresLoader:
             mapping_filepath = Path(rule.mapping_file)
 
             if not mapping_filepath.exists():
-                logger.warning(f"Creating mapping file: {mapping_filepath}")
+                logger.error(f"Mapping file not found for rule '{rule.base_name}': {mapping_filepath}")
+                
+                # Try to create mapping file if sample exists
                 sample_file = next(rule_source_dir.glob("*.*"), None)
-
                 if sample_file:
+                    logger.warning(f"Creating template mapping file from sample: {sample_file}")
                     self._generate_mapping_file(
                         source_filepath=sample_file,
                         mapping_filepath=mapping_filepath,
@@ -1230,22 +1235,52 @@ class PostgresLoader:
                         start_col=rule.start_col or self.global_start_col,
                         sheet_config=rule.sheet_config
                     )
+                    logger.error(f"Template mapping file created. Please configure LoadFlag values in {mapping_filepath} and rerun.")
                 else:
-                    logger.error(f"No sample file found for {rule.base_name} in {rule.directory}")
+                    logger.error(f"No sample file found for {rule.base_name} in {rule.directory} to generate mapping template")
+                
+                # Skip this rule and continue with others
+                continue
 
-            if mapping_filepath.exists():
-                try:
-                    mapping = pd.read_csv(mapping_filepath)
-                    table_created = self.db_manager.create_table_if_not_exists(rule.target_table, mapping)
-                    if not table_created:
-                        logger.error(f"Failed to ensure table exists: {rule.target_table}")
-                except Exception as e:
-                    logger.error(f"Error validating table for {rule.target_table}: {e}")
+            # If mapping file exists, validate it's properly configured
+            try:
+                mapping = pd.read_csv(mapping_filepath)
+                
+                # Check for unconfigured LoadFlags
+                file_columns = mapping[mapping['data_source'] == 'file']
+                unconfigured_columns = file_columns[
+                    (file_columns['LoadFlag'].isna()) | 
+                    (file_columns['LoadFlag'] == '') |
+                    (file_columns['LoadFlag'].str.strip() == '')
+                ]
+                
+                if not unconfigured_columns.empty:
+                    unconfigured_names = unconfigured_columns['RawColumn'].tolist()
+                    logger.error(
+                        f"Rule '{rule.base_name}': Mapping file has unconfigured LoadFlags for columns: {unconfigured_names}. "
+                        f"Please set LoadFlag to 'Y' or 'N' for these columns in {mapping_filepath} and rerun."
+                    )
+                    continue  # Skip this rule
+                
+                # If mapping is valid, create table and add to valid rules
+                table_created = self.db_manager.create_table_if_not_exists(rule.target_table, mapping)
+                if not table_created:
+                    logger.error(f"Failed to ensure table exists: {rule.target_table}")
+                    continue  # Skip this rule
+                    
+                valid_rules.append(rule)
+                logger.info(f"Rule '{rule.base_name}' validated successfully")
+                
+            except Exception as e:
+                logger.error(f"Error validating rule {rule.base_name}: {e}")
+                continue  # Skip this rule
+
+        # Update processing rules to only include valid ones
+        self.processing_rules = valid_rules
+        logger.info(f"Setup validation completed. {len(valid_rules)} rules are valid and ready for processing.")
 
         if not self.db_manager.test_connection():
             raise ConnectionError("Database connection test failed")
-
-        logger.info("Setup validation completed")
 
     @log_os_operations
     def _generate_mapping_file(self, source_filepath: Path, mapping_filepath: Path,
@@ -1355,7 +1390,7 @@ class PostgresLoader:
             ]).to_csv(mapping_filepath, index=False)
 
     # ---------------------------
-    # New columns handling
+    # New columns handling - FIXED VERSION
     # ---------------------------
     def _handle_new_columns(self, df: pd.DataFrame, file_context: FileContext) -> bool:
         """Detect new columns, update mapping file, and block processing until configured."""
@@ -1384,10 +1419,10 @@ class PostgresLoader:
                 'RawColumn': col,
                 'TargetColumn': self._sanitize_column_name(col),
                 'DataType': 'TEXT',
-                'LoadFlag': '',
+                'LoadFlag': '',  # Leave empty to force user configuration
                 'IndexColumn': 'N',
                 'data_source': 'file',
-                'definition': '',
+                'definition': f'NEW COLUMN DETECTED - Please set LoadFlag to Y or N',
                 'order': col_positions[col]
             })
 
@@ -1396,6 +1431,20 @@ class PostgresLoader:
 
         updated_df.to_csv(file_context.mapping_filepath, index=False)
         logger.info(f"Updated mapping file with {len(new_cols)} new columns at correct positions")
+
+        # Check if there are any unconfigured LoadFlags (including the new ones)
+        unconfigured_new = updated_df[
+            (updated_df['data_source'] == 'file') & 
+            ((updated_df['LoadFlag'].isna()) | (updated_df['LoadFlag'] == ''))
+        ]
+
+        if not unconfigured_new.empty:
+            new_col_names = unconfigured_new['RawColumn'].tolist()
+            logger.error(
+                f"New columns detected but not configured: {new_col_names}. "
+                f"Please update {file_context.mapping_filepath} with LoadFlag values and rerun."
+            )
+            return True  # Block processing
 
         configured_new_cols = []
         for _, row in updated_df.iterrows():
@@ -1909,7 +1958,7 @@ class PostgresLoader:
 
             mapping_filepath = Path(rule.mapping_file)
             if not mapping_filepath.exists():
-                logger.warning(f"Mapping file not found: {mapping_filepath}")
+                logger.error(f"Mapping file not found: {mapping_filepath}. Skipping rule '{rule.base_name}'.")
                 continue
 
             search_locations.append(f"Rule '{rule.base_name}': {rule.directory} (subdirectories: {rule.search_subdirectories})")
