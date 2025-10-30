@@ -208,13 +208,23 @@ class FileProcessingRule:
     _compiled_pattern: Any = field(init=False, repr=False)
 
     def __post_init__(self):
-        self._compiled_pattern = re.compile(self.file_pattern)
+        try:
+            self._compiled_pattern = re.compile(self.file_pattern)
+        except re.error as e:
+            logger.error(f"Invalid regex pattern '{self.file_pattern}' for rule {self.base_name}: {e}")
+            raise
         # Set default mapping file path if not provided
         if self.mapping_file is None:
             self.mapping_file = f"rules/{self.base_name}_mapping.csv"
 
     def match(self, filename: str) -> Optional[re.Match]:
-        return self._compiled_pattern.match(filename)
+        """Check if filename matches the pattern with enhanced logging."""
+        match = self._compiled_pattern.match(filename)
+        if match:
+            logger.debug(f"File '{filename}' MATCHED pattern '{self.file_pattern}' for rule '{self.base_name}'")
+        else:
+            logger.debug(f"File '{filename}' DID NOT MATCH pattern '{self.file_pattern}' for rule '{self.base_name}'")
+        return match
 
     @property
     def target_table(self) -> str:
@@ -224,11 +234,15 @@ class FileProcessingRule:
         errors = []
         if not self.directory:
             errors.append("Directory is required")
-        # REMOVED: Directory under inputs/ validation to allow flexible directory structures
-        # if not self.directory.startswith('inputs/'):
-        #     errors.append("Directory should be under inputs/ folder")
         if not self.file_pattern:
             errors.append("File pattern is required")
+        
+        # Validate regex pattern
+        try:
+            re.compile(self.file_pattern)
+        except re.error as e:
+            errors.append(f"Invalid regex pattern '{self.file_pattern}': {e}")
+            
         if self.mode and self.mode not in ["cancel_and_replace", "audit", "insert"]:
             errors.append(f"Invalid mode: {self.mode}")
         if self.date_from_filename_col_name and not self.date_format:
@@ -985,7 +999,7 @@ class PostgresLoader:
     # Enhanced Locking with detailed OS logging
     # ---------------------------
     def _acquire_lock(self):
-        """Prevent multiple concurrent runs with lock file - ENHANCED with detailed OS logging"""
+        """Prevent multiple concurrent runs with lock file - ENHANCED with better error handling and stale lock detection"""
         max_attempts = 5
         attempt = 0
         
@@ -998,86 +1012,190 @@ class PostgresLoader:
                     current_time = time.time()
                     lock_age = current_time - lock_time
                     
-                    logger.debug(f"Lock file exists: {LOCK_FILE}, age: {lock_age:.1f}s, timeout: {self.config.lock_timeout}s")
+                    logger.info(f"Lock file found: {LOCK_FILE}, age: {lock_age:.1f}s, timeout: {self.config.lock_timeout}s")
                     
                     # Check if lock is stale (older than timeout)
                     if lock_age < self.config.lock_timeout:
                         # Check if the process that created the lock is still running
                         try:
                             with open(LOCK_FILE, 'r') as f:
-                                pid_str = f.read().strip()
-                                if pid_str.isdigit():
-                                    pid = int(pid_str)
-                                    # Check if process exists
+                                lock_content = f.read().strip()
+                            
+                            # Parse lock content - could be just PID or could be JSON with more info
+                            pid_str = lock_content
+                            try:
+                                # Try to parse as JSON for enhanced lock files
+                                lock_data = json.loads(lock_content)
+                                pid_str = str(lock_data.get('pid', 'Unknown'))
+                                logger.info(f"Lock file contains process info: PID {pid_str}, created: {lock_data.get('timestamp', 'Unknown')}")
+                            except (json.JSONDecodeError, ValueError):
+                                # Old format - just PID
+                                logger.info(f"Lock file contains PID: {pid_str}")
+                            
+                            if pid_str.isdigit():
+                                pid = int(pid_str)
+                                # Check if process exists using multiple methods
+                                process_running = False
+                                
+                                # Method 1: os.kill with signal 0
+                                try:
+                                    os.kill(pid, 0)  # This will raise OSError if process doesn't exist
+                                    process_running = True
+                                    logger.info(f"Process {pid} is still running (os.kill check)")
+                                except OSError as e:
+                                    if e.errno == 3:  # ESRCH - No such process
+                                        logger.info(f"Process {pid} does not exist (OSError errno 3)")
+                                        process_running = False
+                                    elif e.errno == 1:  # EPERM - Operation not permitted (process exists but we can't signal it)
+                                        logger.warning(f"Process {pid} exists but we lack permission to signal it")
+                                        process_running = True
+                                    else:
+                                        logger.warning(f"Unexpected OSError when checking process {pid}: {e} (errno: {e.errno})")
+                                        # Assume process is running to be safe
+                                        process_running = True
+                                
+                                # Method 2: Cross-platform process check (fallback)
+                                if not process_running:
                                     try:
-                                        os.kill(pid, 0)  # This will raise OSError if process doesn't exist
-                                        # Process is still running
-                                        if attempt == max_attempts - 1:
-                                            logger.error(f"Another instance is running (PID: {pid}) and lock is still valid. Exiting.")
-                                            sys.exit(0)
+                                        import psutil
+                                        if psutil.pid_exists(pid):
+                                            logger.info(f"Process {pid} is running (psutil check)")
+                                            process_running = True
                                         else:
-                                            logger.warning(f"Another instance is running (PID: {pid}). Waiting... (Attempt {attempt + 1}/{max_attempts})")
-                                            time.sleep(2)
-                                            attempt += 1
-                                            continue
-                                    except OSError as e:
-                                        # Process doesn't exist - stale lock
-                                        logger.warning(f"Stale lock file detected (process {pid} not running, errno: {e.errno}). Removing.")
-                                        os.remove(LOCK_FILE)
-                        except (IOError, ValueError) as e:
+                                            logger.info(f"Process {pid} does not exist (psutil check)")
+                                            process_running = False
+                                    except ImportError:
+                                        logger.warning("psutil not available, using basic process check")
+                                
+                                if process_running:
+                                    if attempt == max_attempts - 1:
+                                        logger.error(f"Another instance is running (PID: {pid}) and lock is still valid. Exiting.")
+                                        print(f"ERROR: Another loader instance is running (PID: {pid}).")
+                                        print(f"If this is incorrect, remove the lock file: {LOCK_FILE}")
+                                        sys.exit(1)
+                                    else:
+                                        logger.warning(f"Another instance is running (PID: {pid}). Waiting... (Attempt {attempt + 1}/{max_attempts})")
+                                        time.sleep(3)
+                                        attempt += 1
+                                        continue
+                                else:
+                                    # Process doesn't exist - stale lock
+                                    logger.warning(f"Stale lock file detected (process {pid} not running). Removing.")
+                                    self._remove_lock_file()
+                                    # Continue to try creating lock file
+                            else:
+                                # Invalid PID format - stale lock
+                                logger.warning(f"Lock file contains invalid PID: '{pid_str}'. Removing stale lock.")
+                                self._remove_lock_file()
+                        except (IOError, ValueError, json.JSONDecodeError) as e:
                             # Lock file is corrupt or empty
                             logger.warning(f"Corrupt lock file detected: {e}. Removing.")
-                            os.remove(LOCK_FILE)
+                            self._remove_lock_file()
                     else:
                         # Lock file is too old
                         logger.warning(f"Stale lock file detected (age: {lock_age:.1f}s > timeout: {self.config.lock_timeout}s). Removing.")
-                        os.remove(LOCK_FILE)
+                        self._remove_lock_file()
                 except OSError as e:
-                    logger.warning(f"Error checking lock file {LOCK_FILE}: {e} (errno: {e.errno}). Removing stale lock.")
+                    logger.error(f"Error checking lock file {LOCK_FILE}: {e} (errno: {e.errno}). Attempting to remove stale lock.")
                     try:
-                        os.remove(LOCK_FILE)
+                        self._remove_lock_file()
                     except OSError as remove_error:
                         logger.error(f"Failed to remove lock file: {remove_error} (errno: {remove_error.errno})")
+                        if attempt == max_attempts - 1:
+                            logger.critical(f"Cannot remove lock file after {max_attempts} attempts. Manual intervention required.")
+                            print(f"CRITICAL: Cannot remove lock file {LOCK_FILE}")
+                            print("Please remove it manually and try again.")
+                            sys.exit(1)
 
             # Try to create lock file
             try:
+                lock_data = {
+                    'pid': os.getpid(),
+                    'timestamp': datetime.now().isoformat(),
+                    'run_id': self.run_id,
+                    'hostname': os.uname().nodename if hasattr(os, 'uname') else 'unknown'
+                }
+                
                 with open(LOCK_FILE, 'w') as f:
-                    f.write(str(os.getpid()))
+                    json.dump(lock_data, f, indent=2)
+                
                 self.lock_acquired = True
                 logger.info(f"Lock acquired for run {self.run_id} (PID: {os.getpid()})")
                 return
+                
             except IOError as e:
+                error_msg = f"Could not create lock file (attempt {attempt + 1}/{max_attempts}): {e}"
+                if e.errno == 13:  # Permission denied
+                    error_msg += " - Permission denied. Check directory permissions."
+                elif e.errno == 28:  # No space left
+                    error_msg += " - No space left on device."
+                
+                logger.warning(error_msg)
+                
                 if attempt == max_attempts - 1:
-                    logger.error(f"Failed to acquire lock after {max_attempts} attempts: {e} (errno: {e.errno})")
-                    raise
+                    logger.error(f"Failed to acquire lock after {max_attempts} attempts")
+                    print(f"ERROR: {error_msg}")
+                    sys.exit(1)
                 else:
-                    logger.warning(f"Could not acquire lock (attempt {attempt + 1}/{max_attempts}): {e} (errno: {e.errno})")
-                    time.sleep(1)
+                    time.sleep(2)
                     attempt += 1
 
         logger.error("Failed to acquire lock after maximum attempts")
         sys.exit(1)
 
+    def _remove_lock_file(self):
+        """Safely remove lock file with enhanced error handling"""
+        try:
+            if os.path.exists(LOCK_FILE):
+                # Read lock content before removal for logging
+                try:
+                    with open(LOCK_FILE, 'r') as f:
+                        lock_content = f.read().strip()
+                    logger.info(f"Removing lock file with content: {lock_content}")
+                except:
+                    logger.info("Removing lock file (could not read content)")
+                
+                os.remove(LOCK_FILE)
+                logger.info("Lock file removed successfully")
+            else:
+                logger.debug("Lock file already removed")
+        except OSError as e:
+            error_msg = f"Failed to remove lock file {LOCK_FILE}: {e}"
+            if e.errno == 13:  # Permission denied
+                error_msg += " - Permission denied. You may need to remove it manually."
+            elif e.errno == 2:  # File not found
+                error_msg += " - File not found (already removed)."
+            
+            logger.error(error_msg)
+            raise
+
     def _release_lock(self):
-        """Clean up lock file on exit - ENHANCED with detailed OS logging"""
+        """Clean up lock file on exit - ENHANCED with better error handling"""
         if self.lock_acquired:
             try:
                 if os.path.exists(LOCK_FILE):
                     # Verify we own the lock before removing it
                     try:
                         with open(LOCK_FILE, 'r') as f:
-                            lock_pid = f.read().strip()
-                        if lock_pid == str(os.getpid()):
-                            os.remove(LOCK_FILE)
-                            logger.info("Lock released successfully")
+                            lock_data = json.load(f)
+                        lock_pid = lock_data.get('pid')
+                        
+                        if lock_pid == os.getpid():
+                            self._remove_lock_file()
                         else:
-                            logger.warning(f"Lock file owned by different process (PID: {lock_pid}), not removing")
-                    except (IOError, ValueError) as e:
-                        logger.warning(f"Could not read lock file: {e}, removing anyway")
-                        os.remove(LOCK_FILE)
+                            logger.warning(f"Lock file owned by different process (PID: {lock_pid}), not removing. Our PID: {os.getpid()}")
+                    except (IOError, ValueError, json.JSONDecodeError) as e:
+                        logger.warning(f"Could not read lock file to verify ownership: {e}, removing anyway")
+                        self._remove_lock_file()
+                else:
+                    logger.debug("Lock file already removed")
+                    
                 self.lock_acquired = False
+                logger.info("Lock released successfully")
+                
             except Exception as e:
                 logger.error(f"Error releasing lock: {type(e).__name__}: {e}")
+                # Don't raise here to avoid masking original error
 
     def cleanup(self):
         """Explicit cleanup method"""
@@ -1146,7 +1264,7 @@ class PostgresLoader:
                         continue
 
                     rules.append(rule)
-                    logger.info(f"Loaded rule '{base_name}' with directory: {rule.directory}, mapping: {rule.mapping_file}")
+                    logger.info(f"Loaded rule '{base_name}' with directory: {rule.directory}, pattern: '{rule.file_pattern}', mapping: {rule.mapping_file}")
                 except Exception as e:
                     logger.error(f"Failed to load rule from {rule_file_path}: {e}")
 
@@ -1969,6 +2087,8 @@ class PostgresLoader:
                 search_pattern = rule_source_dir.iterdir()
 
             files_found = 0
+            files_skipped_pattern = 0
+            
             for file_path in search_pattern:
                 if (file_path.is_file() and
                         file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json'] and
@@ -1977,7 +2097,7 @@ class PostgresLoader:
                     filename = file_path.name
                     match = rule.match(filename)
 
-                    # FIX: Only include files that match the pattern
+                    # STRICT PATTERN MATCHING: Only include files that match the pattern
                     if match:
                         files_found += 1
                         extracted_timestamp = ""
@@ -2006,10 +2126,12 @@ class PostgresLoader:
                             sheet_config=rule.sheet_config
                         )
                         all_potential_file_contexts.append(file_context)
+                        logger.info(f"File '{filename}' MATCHED pattern '{rule.file_pattern}' for rule '{rule.base_name}'")
                     else:
+                        files_skipped_pattern += 1
                         logger.debug(f"Skipping file '{filename}' - does not match pattern '{rule.file_pattern}'")
             
-            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files (pattern: '{rule.file_pattern}')")
+            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files, skipped {files_skipped_pattern} non-matching files (pattern: '{rule.file_pattern}')")
 
         # Search in special processing directories with enhanced logging
         special_dirs = [
@@ -2024,6 +2146,9 @@ class PostgresLoader:
                 files_in_dir = list(special_dir.iterdir())
                 logger.info(f"Checking {category} directory: {dir_path} ({len(files_in_dir)} files)")
                 
+                matched_files = 0
+                unmatched_files = 0
+                
                 for file_path in files_in_dir:
                     if (file_path.is_file() and
                             file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json']):
@@ -2037,6 +2162,7 @@ class PostgresLoader:
                                 break
 
                         if matching_rule:
+                            matched_files += 1
                             mapping_filepath = Path(matching_rule.mapping_file)
 
                             extracted_timestamp = ""
@@ -2066,7 +2192,11 @@ class PostgresLoader:
                             )
                             setattr(file_context, attr_name, True)
                             all_potential_file_contexts.append(file_context)
-                            logger.debug(f"Found {category} file: {filename}")
+                            logger.info(f"Found {category} file: {filename} matched by rule '{matching_rule.base_name}' (pattern: '{matching_rule.file_pattern}')")
+                        else:
+                            unmatched_files += 1
+                            logger.warning(f"File {filename} in {category} directory did not match any rule. Skipping.")
+                logger.info(f"{category} directory: {matched_files} files matched rules, {unmatched_files} files skipped (no matching rule)")
             else:
                 logger.debug(f"{category} directory not found or not accessible: {dir_path}")
 
@@ -2697,16 +2827,84 @@ def create_sample_configs():
 # Enhanced main entrypoint with OS error handling
 # ===========================
 if __name__ == "__main__":
-    # Enhanced stale lock detection with logging
+    # Enhanced stale lock detection with better error messages
     if os.path.exists(LOCK_FILE):
         try:
             lock_age = time.time() - os.path.getmtime(LOCK_FILE)
-            if lock_age > 3600:
-                logger.warning(f"Removing stale lock file (age: {lock_age:.1f}s)")
-                os.remove(LOCK_FILE)
-                print("Removed stale lock file")
+            lock_timeout = 3600  # 1 hour default for pre-config check
+            
+            # Try to read config for actual timeout if available
+            try:
+                if os.path.exists(GLOBAL_CONFIG_FILE):
+                    with open(GLOBAL_CONFIG_FILE, 'r') as f:
+                        config_data = yaml.safe_load(f)
+                        lock_timeout = config_data.get('lock_timeout', 3600)
+            except:
+                pass  # Use default if config can't be read
+            
+            print(f"🔍 Found existing lock file: {LOCK_FILE}")
+            print(f"⏰ Lock age: {lock_age:.1f}s, Timeout: {lock_timeout}s")
+            
+            if lock_age > lock_timeout:
+                print("🕒 Lock file is stale (older than timeout). Removing...")
+                try:
+                    # Try to read lock content for info
+                    with open(LOCK_FILE, 'r') as f:
+                        content = f.read().strip()
+                    print(f"📄 Lock content: {content}")
+                except:
+                    pass
+                    
+                try:
+                    os.remove(LOCK_FILE)
+                    print("✅ Stale lock file removed successfully")
+                except OSError as e:
+                    print(f"❌ Could not remove lock file: {e}")
+                    print("Please remove it manually and try again:")
+                    print(f"  rm {LOCK_FILE}")
+                    sys.exit(1)
+            else:
+                print("🔒 Lock file is still valid. Checking if process is running...")
+                try:
+                    with open(LOCK_FILE, 'r') as f:
+                        lock_content = f.read().strip()
+                    
+                    # Try to parse as JSON
+                    try:
+                        lock_data = json.loads(lock_content)
+                        pid = lock_data.get('pid', 'Unknown')
+                        timestamp = lock_data.get('timestamp', 'Unknown')
+                        print(f"🖥️  Lock created by PID: {pid} at {timestamp}")
+                    except:
+                        pid = lock_content
+                        print(f"🖥️  Lock created by PID: {pid}")
+                    
+                    if str(pid).isdigit():
+                        # Check if process exists
+                        try:
+                            os.kill(int(pid), 0)
+                            print(f"✅ Process {pid} is still running")
+                            print("⏳ Please wait for it to complete or terminate it before running again.")
+                            print(f"🛠️  If the process is not running, remove the lock file: rm {LOCK_FILE}")
+                            sys.exit(1)
+                        except OSError as e:
+                            if e.errno == 3:  # No such process
+                                print(f"❌ Process {pid} does not exist. Removing stale lock...")
+                                try:
+                                    os.remove(LOCK_FILE)
+                                    print("✅ Stale lock file removed")
+                                except OSError as e2:
+                                    print(f"❌ Could not remove lock file: {e2}")
+                                    sys.exit(1)
+                            else:
+                                print(f"⚠️  Cannot check process status: {e}")
+                except Exception as e:
+                    print(f"❌ Error reading lock file: {e}")
+                    # Continue and let the main lock handling deal with it
+                    
         except Exception as e:
-            print(f"Error checking lock file: {e}")
+            print(f"❌ Error checking lock file: {e}")
+            # Continue and let the main lock handling deal with it
 
     try:
         # Remove pattern extraction functionality completely
@@ -2743,14 +2941,14 @@ if __name__ == "__main__":
         )
 
         result = loader.process_files()
-        print(f"Processed: {result['processed']}, Failed: {result['failed']}")
+        print(f"✅ Processing completed: {result['processed']} processed, {result['failed']} failed")
         
     except KeyboardInterrupt:
         logger.info("Processing interrupted by user")
-        print("Processing interrupted by user")
+        print("\n⚠️  Processing interrupted by user")
         sys.exit(1)
     except Exception as e:
         logger.critical(f"Fatal error during processing: {type(e).__name__}: {e}")
-        print(f"Processing failed: {e}")
-        print("Check processing.log for details")
+        print(f"❌ Processing failed: {e}")
+        print("📋 Check the latest log file in logs/ directory for details")
         sys.exit(1)
