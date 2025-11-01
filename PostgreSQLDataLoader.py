@@ -228,7 +228,7 @@ class LockManager:
                                     else:
                                         logger.warning(f"Error checking process {pid}: {e}. Removing stale lock.")
                                         self._safe_remove_lock()
-                        except (IOError, ValueError) as e:
+                    except (IOError, ValueError) as e:
                             # Lock file is corrupt or empty
                             logger.warning(f"Corrupt lock file detected: {e}. Removing.")
                             self._safe_remove_lock()
