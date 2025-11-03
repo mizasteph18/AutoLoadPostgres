@@ -228,10 +228,10 @@ class LockManager:
                                     else:
                                         logger.warning(f"Error checking process {pid}: {e}. Removing stale lock.")
                                         self._safe_remove_lock()
-                    except (IOError, ValueError) as e:
-                        # Lock file is corrupt or empty
-                        logger.warning(f"Corrupt lock file detected: {e}. Removing.")
-                        self._safe_remove_lock()
+                        except (IOError, ValueError) as e:
+                            # Lock file is corrupt or empty
+                            logger.warning(f"Corrupt lock file detected: {e}. Removing.")
+                            self._safe_remove_lock()
                     except OSError as e:
                         logger.warning(f"Error checking lock file {self.lock_file}: {e}. Removing stale lock.")
                         self._safe_remove_lock()
@@ -377,6 +377,11 @@ class FileProcessingRule:
     search_subdirectories: bool = True
     sheet_config: Dict[str, Any] = field(default_factory=dict)
     mapping_file: str = None  # Explicit mapping file path
+    
+    # NEW: Skip configuration options
+    skip_subdirectories: List[str] = field(default_factory=list)  # Directories to skip entirely
+    skip_file_patterns: List[str] = field(default_factory=list)   # File patterns to skip
+    
     _compiled_pattern: Any = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -435,6 +440,13 @@ class FileProcessingRule:
             
             if processing_method == 'pattern' and not self.sheet_config.get('sheet_name_pattern'):
                 errors.append("sheet_name_pattern is required when processing_method is 'pattern'")
+        
+        # Validate skip patterns
+        for pattern in self.skip_file_patterns:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                errors.append(f"Invalid skip pattern '{pattern}': {e}")
         
         return len(errors) == 0, errors
 
@@ -928,11 +940,16 @@ class FileProcessor:
 
     @log_os_operations
     def _load_csv(self, file_path: Path, start_row: int, start_col: int) -> pd.DataFrame:
-        logger.debug(f"Loading CSV: {file_path}, skiprows: {start_row}, usecols from: {start_col}")
-        if start_row and start_row > 0:
-            df = pd.read_csv(file_path, skiprows=range(0, start_row), header=0).iloc[:, start_col:]
-        else:
-            df = pd.read_csv(file_path, header=0).iloc[:, start_col:]
+        # FIXED: start_row IS the header row, so skip (start_row-1) rows
+        skip_rows = max(0, start_row - 1) if start_row > 0 else 0
+        logger.debug(f"Loading CSV: {file_path}, skiprows: {skip_rows} (to reach header row {start_row}), usecols from: {start_col}")
+        
+        df = pd.read_csv(file_path, skiprows=skip_rows, header=0)
+        
+        # Apply start_col (1-based to 0-based conversion)
+        if start_col > 0:
+            effective_start_col = start_col - 1
+            df = df.iloc[:, effective_start_col:]
         
         logger.info(f"Loaded CSV: {len(df)} rows, {len(df.columns)} columns")
         return df
@@ -946,20 +963,29 @@ class FileProcessor:
             sheet_config = {}
             
         processing_method = sheet_config.get('processing_method', 'specific')
-        logger.info(f"Loading Excel with method: {processing_method}, start_row: {start_row}, start_col: {start_col}")
+        
+        # FIXED: start_row IS the header row, so skip (start_row-1) rows
+        skip_rows = max(0, start_row - 1) if start_row > 0 else 0
+        logger.info(f"Loading Excel with method: {processing_method}, skip_rows: {skip_rows} (to reach header row {start_row}), start_col: {start_col}")
         
         if processing_method == 'specific':
             sheet_name = sheet_config.get('specific_sheet', 'Sheet1')
             try:
                 logger.debug(f"Loading specific sheet: {sheet_name}")
-                df = pd.read_excel(file_path, sheet_name=sheet_name, skiprows=start_row, header=0)
-                if self._is_sheet_empty(df, start_col):
+                df = pd.read_excel(file_path, sheet_name=sheet_name, skiprows=skip_rows, header=0)
+                
+                # Apply start_col (1-based to 0-based conversion)
+                if start_col > 0:
+                    effective_start_col = start_col - 1
+                    df = df.iloc[:, effective_start_col:]
+                    
+                if self._is_sheet_empty(df, 0):  # start_col already applied
                     if self.config.warn_on_empty_sheets:
                         logger.warning(f"Sheet '{sheet_name}' is empty or contains only headers")
                     return pd.DataFrame()
                 df['_source_sheet'] = sheet_name
                 logger.info(f"Successfully loaded sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
-                return df.iloc[:, start_col:]
+                return df
             except ValueError as e:
                 logger.error(f"Sheet '{sheet_name}' not found in {file_path}: {e}")
                 raise
@@ -987,14 +1013,19 @@ class FileProcessor:
         for sheet_name in sheet_names:
             try:
                 logger.debug(f"Processing sheet: {sheet_name}")
-                df = pd.read_excel(file_path, sheet_name=sheet_name, skiprows=start_row, header=0)
-                if self._is_sheet_empty(df, start_col):
+                df = pd.read_excel(file_path, sheet_name=sheet_name, skiprows=skip_rows, header=0)
+                if self._is_sheet_empty(df, 0):  # start_col will be applied later
                     if self.config.warn_on_empty_sheets:
                         logger.info(f"Skipping empty sheet: {sheet_name}")
                     continue
                     
+                # Apply start_col (1-based to 0-based conversion)
+                if start_col > 0:
+                    effective_start_col = start_col - 1
+                    df = df.iloc[:, effective_start_col:]
+                    
                 df['_source_sheet'] = sheet_name
-                dfs.append(df.iloc[:, start_col:])
+                dfs.append(df)
                 sheets_processed += 1
                 logger.info(f"Successfully processed sheet '{sheet_name}': {len(df)} rows")
             except Exception as e:
@@ -1256,7 +1287,10 @@ class PostgresLoader:
                         hash_exclude_columns=rule_data.get('hash_exclude_columns', []),
                         search_subdirectories=rule_data.get('search_subdirectories', True),
                         sheet_config=rule_data.get('sheet_config', {}),
-                        mapping_file=mapping_file
+                        mapping_file=mapping_file,
+                        # NEW: Load skip configurations
+                        skip_subdirectories=rule_data.get('skip_subdirectories', []),
+                        skip_file_patterns=rule_data.get('skip_file_patterns', [])
                     )
 
                     is_valid, errors = rule.validate()
@@ -1265,7 +1299,7 @@ class PostgresLoader:
                         continue
 
                     rules.append(rule)
-                    logger.info(f"Loaded rule '{base_name}' with directory: {rule.directory}, pattern: '{rule.file_pattern}', mapping: {rule.mapping_file}")
+                    logger.info(f"Loaded rule '{base_name}' with directory: {rule.directory}, pattern: '{rule.file_pattern}', skip_dirs: {rule.skip_subdirectories}, skip_patterns: {rule.skip_file_patterns}")
                 except Exception as e:
                     logger.error(f"Failed to load rule from {rule_file_path}: {e}")
 
@@ -1407,50 +1441,109 @@ class PostgresLoader:
                               sheet_config: Dict[str, Any] = None):
         try:
             logger.info(f"Generating mapping file: {mapping_filepath} from sample: {source_filepath}")
+            logger.info(f"Parameters - start_row: {start_row} (header row), start_col: {start_col}")
             
-            # For Excel files with sheet config, sample from appropriate sheet
+            # FIXED LOGIC: start_row IS the header row, so we skip (start_row - 1) rows to get to it
+            skip_rows = max(0, start_row - 1) if start_row > 0 else 0
+            logger.info(f"Calculated skip_rows: {skip_rows} (to reach header row {start_row})")
+            
+            # For Excel files with sheet config
             if source_filepath.suffix.lower() in ['.xlsx', '.xls'] and sheet_config:
                 processing_method = sheet_config.get('processing_method', 'specific')
                 if processing_method == 'specific':
                     sheet_name = sheet_config.get('specific_sheet', 'Sheet1')
-                    df_sample = pd.read_excel(source_filepath, sheet_name=sheet_name, 
-                                            skiprows=start_row, nrows=100, header=0)
+                    try:
+                        logger.debug(f"Reading Excel sheet '{sheet_name}' with skip_rows={skip_rows} to get header row {start_row}")
+                        
+                        # FIXED: Use skip_rows (start_row-1) to reach the header row, then use header=0
+                        df_sample = pd.read_excel(source_filepath, sheet_name=sheet_name, 
+                                                skiprows=skip_rows, nrows=100, header=0)
+                        logger.info(f"Successfully read Excel file: {len(df_sample)} rows, {len(df_sample.columns)} columns")
+                        
+                        # Apply start_col AFTER reading
+                        if not df_sample.empty and start_col > 0:
+                            original_cols = len(df_sample.columns)
+                            if start_col <= original_cols:
+                                # FIXED: start_col is 1-based, so subtract 1 for 0-based indexing
+                                effective_start_col = start_col - 1
+                                df_sample = df_sample.iloc[:, effective_start_col:]
+                                logger.info(f"Applied start_col={start_col}: {original_cols} -> {len(df_sample.columns)} columns")
+                            else:
+                                logger.warning(f"start_col={start_col} is > number of columns {original_cols}, ignoring")
+                        
+                    except Exception as e:
+                        logger.error(f"Error reading specific sheet '{sheet_name}': {e}")
+                        raise
                 else:
-                    # For multiple sheets, sample from first available sheet
-                    df_sample = pd.read_excel(source_filepath, sheet_name=0, 
-                                            skiprows=start_row, nrows=100, header=0)
+                    # For multiple sheets, use the same logic
+                    try:
+                        df_sample = pd.read_excel(source_filepath, sheet_name=0, 
+                                                skiprows=skip_rows, nrows=100, header=0)
+                        # Apply start_col for multiple sheets too
+                        if not df_sample.empty and start_col > 0:
+                            original_cols = len(df_sample.columns)
+                            if start_col <= original_cols:
+                                effective_start_col = start_col - 1
+                                df_sample = df_sample.iloc[:, effective_start_col:]
+                                logger.info(f"Applied start_col={start_col}: {original_cols} -> {len(df_sample.columns)} columns")
+                    except Exception as e:
+                        logger.error(f"Error reading first sheet: {e}")
+                        raise
             else:
-                # Existing logic for other file types
+                # Existing logic for other file types with the same fix
                 if source_filepath.exists():
                     ext = source_filepath.suffix.lower()
-                    if ext == '.csv':
-                        df_sample = pd.read_csv(source_filepath, skiprows=range(1, start_row + 1), nrows=100, header=0)
-                    elif ext in ['.xlsx', '.xls']:
-                        df_sample = pd.read_excel(source_filepath, skiprows=start_row, nrows=100, header=0)
-                    elif ext == '.parquet':
-                        df_sample = pd.read_parquet(source_filepath).iloc[:100, :]
-                    elif ext == '.json':
-                        df_sample = pd.read_json(source_filepath).iloc[:100, :]
-                    else:
-                        df_sample = pd.DataFrame()
+                    try:
+                        if ext == '.csv':
+                            df_sample = pd.read_csv(source_filepath, skiprows=skip_rows, nrows=100, header=0)
+                        elif ext in ['.xlsx', '.xls']:
+                            df_sample = pd.read_excel(source_filepath, skiprows=skip_rows, nrows=100, header=0)
+                        elif ext == '.parquet':
+                            df_sample = pd.read_parquet(source_filepath).iloc[:100, :]
+                        elif ext == '.json':
+                            df_sample = pd.read_json(source_filepath).iloc[:100, :]
+                        else:
+                            df_sample = pd.DataFrame()
+                        
+                        # Apply start_col with same 1-based to 0-based conversion
+                        if not df_sample.empty and start_col > 0:
+                            original_cols = len(df_sample.columns)
+                            if start_col <= original_cols:
+                                effective_start_col = start_col - 1
+                                df_sample = df_sample.iloc[:, effective_start_col:]
+                                logger.info(f"Applied start_col={start_col}: {original_cols} -> {len(df_sample.columns)} columns")
+                        
+                        logger.info(f"Successfully read {ext} file: {len(df_sample)} rows, {len(df_sample.columns)} columns")
+                    except Exception as e:
+                        logger.error(f"Error reading file {source_filepath}: {e}")
+                        raise
                 else:
+                    logger.error(f"Source file does not exist: {source_filepath}")
                     df_sample = pd.DataFrame()
 
-            if not df_sample.empty:
-                df_sample = df_sample.iloc[:, start_col:]
+            # Rest of the method remains the same...
+            if df_sample.empty:
+                logger.warning("No data found in sample file after applying start_row and start_col")
+                # Create empty mapping file with correct structure
+                pd.DataFrame(columns=[
+                    'RawColumn', 'TargetColumn', 'DataType', 'LoadFlag', 'IndexColumn',
+                    'data_source', 'definition', 'order'
+                ]).to_csv(mapping_filepath, index=False)
+                return
+
             columns = df_sample.columns.tolist()
             dtypes = df_sample.dtypes.apply(str).to_dict()
 
             sample_values = {}
             for col in columns:
-                sample_values[col] = df_sample[col].iloc[0] if not df_sample[col].empty else None
+                sample_values[col] = df_sample[col].iloc[0] if not df_sample.empty and not df_sample[col].empty else None
 
             mapping_data = []
             for i, col in enumerate(columns):
                 pd_type = dtypes.get(col, 'object')
                 sample_value = sample_values.get(col)
                 sql_type = self._infer_postgres_type(pd_type, sample_value)
-                load_flag = 'Y'
+                load_flag = 'Y'  # Default to 'Y' for new columns
                 index_column = 'N'
                 if any(pattern in col.lower() for pattern in ['id', 'key', 'code', 'num']):
                     index_column = 'Y'
@@ -1500,9 +1593,11 @@ class PostgresLoader:
 
             mapping_filepath.parent.mkdir(parents=True, exist_ok=True)
             mapping_df.to_csv(mapping_filepath, index=False)
-            logger.info(f"Created mapping file with intelligent defaults: {mapping_filepath}")
+            logger.info(f"Created mapping file with {len(columns)} file columns: {mapping_filepath}")
+            
         except Exception as e:
             logger.error(f"Mapping generation failed for {source_filepath}: {e}")
+            # Create empty mapping file as fallback
             pd.DataFrame(columns=[
                 'RawColumn', 'TargetColumn', 'DataType', 'LoadFlag', 'IndexColumn',
                 'data_source', 'definition', 'order'
@@ -2080,7 +2175,11 @@ class PostgresLoader:
                 logger.error(f"Mapping file not found: {mapping_filepath}. Skipping rule '{rule.base_name}'.")
                 continue
 
-            search_locations.append(f"Rule '{rule.base_name}': {rule.directory} (subdirectories: {rule.search_subdirectories})")
+            # NEW: Get skip patterns from rule configuration
+            skip_subdirectories = getattr(rule, 'skip_subdirectories', [])
+            skip_file_patterns = getattr(rule, 'skip_file_patterns', [])
+            
+            search_locations.append(f"Rule '{rule.base_name}': {rule.directory} (subdirectories: {rule.search_subdirectories}, skip_dirs: {skip_subdirectories}, skip_patterns: {skip_file_patterns})")
 
             if rule.search_subdirectories:
                 search_pattern = rule_source_dir.rglob('*')
@@ -2089,50 +2188,94 @@ class PostgresLoader:
 
             files_found = 0
             files_skipped_pattern = 0
+            files_skipped_directory = 0
+            files_skipped_skip_pattern = 0
             
             for file_path in search_pattern:
-                if (file_path.is_file() and
-                        file_path.suffix.lower() in ['.csv', '.xlsx', '.xls', '.parquet', '.json'] and
-                        not any(part in [DUPLICATES_ROOT_DIR, FORMAT_CONFLICT_DIR, FAILED_ROWS_DIR] for part in file_path.parts)):
+                # Skip directories that are in skip list
+                if file_path.is_dir():
+                    continue
 
-                    filename = file_path.name
-                    match = rule.match(filename)
+                # Check if file is in a skipped subdirectory
+                if skip_subdirectories:
+                    file_relative_path = file_path.relative_to(rule_source_dir)
+                    # Check if any parent directory is in the skip list
+                    skip_this_file = False
+                    for parent in file_relative_path.parents:
+                        if parent.name in skip_subdirectories:
+                            files_skipped_directory += 1
+                            logger.debug(f"Skipping file in excluded directory '{parent}': {file_path}")
+                            skip_this_file = True
+                            break
+                    
+                    if skip_this_file:
+                        continue
 
-                    # STRICT PATTERN MATCHING: Only include files that match the pattern
-                    if match:
-                        files_found += 1
-                        extracted_timestamp = ""
-                        if rule.date_format and match.groups():
-                            try:
-                                date_str = "".join(match.groups())
-                                datetime.strptime(date_str, rule.date_format)
-                                extracted_timestamp = date_str
-                            except ValueError:
-                                pass
+                # Check file extension
+                if file_path.suffix.lower() not in ['.csv', '.xlsx', '.xls', '.parquet', '.json']:
+                    continue
 
-                        file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
+                # Skip files in processing directories (existing logic)
+                if any(part in [DUPLICATES_ROOT_DIR, FORMAT_CONFLICT_DIR, FAILED_ROWS_DIR] for part in file_path.parts):
+                    continue
 
-                        file_context = FileContext(
-                            filepath=file_path,
-                            filename=filename,
-                            target_table=rule.target_table,
-                            mapping_filepath=mapping_filepath,
-                            extracted_timestamp_str=extracted_timestamp,
-                            file_modified_timestamp=file_modified,
-                            start_row=rule.start_row or self.global_start_row,
-                            start_col=rule.start_col or self.global_start_col,
-                            mode=rule.mode or "insert",
-                            date_from_filename_col_name=rule.date_from_filename_col_name,
-                            hash_exclude_columns=rule.hash_exclude_columns,
-                            sheet_config=rule.sheet_config
-                        )
-                        all_potential_file_contexts.append(file_context)
-                        logger.info(f"File '{filename}' MATCHED pattern '{rule.file_pattern}' for rule '{rule.base_name}'")
-                    else:
-                        files_skipped_pattern += 1
-                        logger.debug(f"Skipping file '{filename}' - does not match pattern '{rule.file_pattern}'")
+                filename = file_path.name
+                
+                # NEW: Check if file matches any skip patterns
+                if skip_file_patterns:
+                    skip_file = False
+                    for skip_pattern in skip_file_patterns:
+                        try:
+                            if re.search(skip_pattern, filename):
+                                files_skipped_skip_pattern += 1
+                                logger.debug(f"Skipping file matching skip pattern '{skip_pattern}': {filename}")
+                                skip_file = True
+                                break
+                        except re.error as e:
+                            logger.warning(f"Invalid skip pattern '{skip_pattern}' for rule '{rule.base_name}': {e}")
+                    if skip_file:
+                        continue
+
+                match = rule.match(filename)
+
+                # STRICT PATTERN MATCHING: Only include files that match the pattern
+                if match:
+                    files_found += 1
+                    extracted_timestamp = ""
+                    if rule.date_format and match.groups():
+                        try:
+                            date_str = "".join(match.groups())
+                            datetime.strptime(date_str, rule.date_format)
+                            extracted_timestamp = date_str
+                        except ValueError:
+                            pass
+
+                    file_modified = datetime.fromtimestamp(file_path.stat().st_mtime)
+
+                    file_context = FileContext(
+                        filepath=file_path,
+                        filename=filename,
+                        target_table=rule.target_table,
+                        mapping_filepath=mapping_filepath,
+                        extracted_timestamp_str=extracted_timestamp,
+                        file_modified_timestamp=file_modified,
+                        start_row=rule.start_row or self.global_start_row,
+                        start_col=rule.start_col or self.global_start_col,
+                        mode=rule.mode or "insert",
+                        date_from_filename_col_name=rule.date_from_filename_col_name,
+                        hash_exclude_columns=rule.hash_exclude_columns,
+                        sheet_config=rule.sheet_config
+                    )
+                    all_potential_file_contexts.append(file_context)
+                    logger.info(f"File '{filename}' MATCHED pattern '{rule.file_pattern}' for rule '{rule.base_name}'")
+                else:
+                    files_skipped_pattern += 1
+                    logger.debug(f"Skipping file '{filename}' - does not match pattern '{rule.file_pattern}'")
             
-            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files, skipped {files_skipped_pattern} non-matching files (pattern: '{rule.file_pattern}')")
+            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files, "
+                       f"skipped {files_skipped_pattern} non-matching files, "
+                       f"{files_skipped_directory} files in excluded directories, "
+                       f"{files_skipped_skip_pattern} files matching skip patterns")
 
         # Search in special processing directories with enhanced logging
         special_dirs = [
@@ -2732,6 +2875,8 @@ def create_sample_configs():
             "date_from_filename_col_name": "file_date",
             "hash_exclude_columns": [],
             "search_subdirectories": True,
+            "skip_subdirectories": ["processed", "archive", "temp"],
+            "skip_file_patterns": [r".*test.*", r".*backup.*"],
             "mapping_file": "rules/sales_mapping.csv"
         },
         "inventory_rule.yaml": {
@@ -2745,6 +2890,8 @@ def create_sample_configs():
             "date_from_filename_col_name": "file_date",
             "hash_exclude_columns": [],
             "search_subdirectories": True,
+            "skip_subdirectories": ["processed", "rejected"],
+            "skip_file_patterns": [r".*2022.*", r".*2023.*", r".*draft.*"],
             "sheet_config": {
                 "processing_method": "multiple",
                 "sheet_names": ["Sheet1", "Sheet2"]
@@ -2762,6 +2909,8 @@ def create_sample_configs():
             "date_from_filename_col_name": "report_date",
             "hash_exclude_columns": [],
             "search_subdirectories": True,
+            "skip_subdirectories": ["processed", "archived", "temp"],
+            "skip_file_patterns": [r".*old.*", r".*template.*", r".*202[0-2].*"],
             "sheet_config": {
                 "processing_method": "all"
             },
