@@ -1156,6 +1156,9 @@ class PostgresLoader:
         # Enhanced lock management
         self.lock_manager = LockManager(timeout=self.config.lock_timeout)
         
+        # NEW: Track blocked rules
+        self.blocked_rules = {}  # rule_name -> reason for blocking
+        
         # Create organized directory structure
         self._create_directory_structure()
 
@@ -1411,6 +1414,8 @@ class PostgresLoader:
                         f"Rule '{rule.base_name}': Mapping file has unconfigured LoadFlags for columns: {unconfigured_names}. "
                         f"Please set LoadFlag to 'Y' or 'N' for these columns in {mapping_filepath} and rerun."
                     )
+                    # Block the rule
+                    self.blocked_rules[rule.base_name] = f"Unconfigured LoadFlags in mapping file: {unconfigured_names}"
                     continue  # Skip this rule
                 
                 # If mapping is valid, create table and add to valid rules
@@ -1602,10 +1607,13 @@ class PostgresLoader:
             ]).to_csv(mapping_filepath, index=False)
 
     # ---------------------------
-    # New columns handling - FIXED VERSION
+    # New columns handling - UPDATED to block entire rule
     # ---------------------------
-    def _handle_new_columns(self, df: pd.DataFrame, file_context: FileContext) -> bool:
-        """Detect new columns, update mapping file, and block processing until configured."""
+    def _handle_new_columns(self, df: pd.DataFrame, file_context: FileContext) -> Tuple[bool, str]:
+        """
+        Detect new columns, update mapping file. 
+        Returns: (should_block_processing, error_message)
+        """
         mapping = pd.read_csv(file_context.mapping_filepath)
 
         current_cols = df.columns.tolist()
@@ -1613,9 +1621,9 @@ class PostgresLoader:
         new_cols = [col for col in current_cols if col not in existing_cols]
 
         if not new_cols:
-            return False
+            return False, ""
 
-        logger.warning(f"New columns detected in {file_context.filename}: {', '.join(new_cols)}")
+        logger.warning(f"New columns detected in {file_context.filename} for rule '{file_context.target_table}': {', '.join(new_cols)}")
 
         col_positions = {col: idx for idx, col in enumerate(current_cols)}
 
@@ -1642,7 +1650,7 @@ class PostgresLoader:
         updated_df = updated_df.sort_values('order')
 
         updated_df.to_csv(file_context.mapping_filepath, index=False)
-        logger.info(f"Updated mapping file with {len(new_cols)} new columns at correct positions")
+        logger.info(f"Updated mapping file with {len(new_cols)} new columns for rule '{file_context.target_table}'")
 
         # Check if there are any unconfigured LoadFlags (including the new ones)
         unconfigured_new = updated_df[
@@ -1652,11 +1660,15 @@ class PostgresLoader:
 
         if not unconfigured_new.empty:
             new_col_names = unconfigured_new['RawColumn'].tolist()
-            logger.error(
-                f"New columns detected but not configured: {new_col_names}. "
+            error_msg = (
+                f"Rule '{file_context.target_table}' blocked: New columns detected but not configured: {new_col_names}. "
                 f"Please update {file_context.mapping_filepath} with LoadFlag values and rerun."
             )
-            return True  # Block processing
+            
+            # Block the entire rule
+            self.blocked_rules[file_context.target_table] = error_msg
+            logger.error(error_msg)
+            return True, error_msg
 
         configured_new_cols = []
         for _, row in updated_df.iterrows():
@@ -1674,13 +1686,14 @@ class PostgresLoader:
             success = self.db_manager.alter_table_add_columns(file_context.target_table, configured_new_cols)
             if success:
                 logger.info(f"Successfully added new columns to table {file_context.target_table}")
-                return False
+                return False, ""
             else:
-                logger.error(f"Failed to add new columns to table {file_context.target_table}")
-                return True
+                error_msg = f"Failed to add new columns to table {file_context.target_table}"
+                self.blocked_rules[file_context.target_table] = error_msg
+                logger.error(error_msg)
+                return True, error_msg
 
-        logger.warning(f"New columns detected but not configured. Please update {file_context.mapping_filepath}")
-        return True
+        return False, ""
 
     def _check_and_add_configured_columns(self, file_context: FileContext) -> bool:
         if not self.config.auto_add_columns:
@@ -2163,6 +2176,11 @@ class PostgresLoader:
         logger.info("Starting file discovery process")
         
         for rule in self.processing_rules:
+            # Skip blocked rules
+            if rule.target_table in self.blocked_rules:
+                logger.warning(f"Skipping rule '{rule.target_table}' because it's blocked: {self.blocked_rules[rule.target_table]}")
+                continue
+                
             rule_source_dir = Path(rule.directory)
             if not rule_source_dir.exists():
                 logger.warning(f"Source directory not found: {rule_source_dir}")
@@ -2170,14 +2188,14 @@ class PostgresLoader:
 
             mapping_filepath = Path(rule.mapping_file)
             if not mapping_filepath.exists():
-                logger.error(f"Mapping file not found: {mapping_filepath}. Skipping rule '{rule.base_name}'.")
+                logger.error(f"Mapping file not found: {mapping_filepath}. Skipping rule '{rule.target_table}'.")
                 continue
 
             # NEW: Get skip patterns from rule configuration
             skip_subdirectories = getattr(rule, 'skip_subdirectories', [])
             skip_file_patterns = getattr(rule, 'skip_file_patterns', [])
             
-            search_locations.append(f"Rule '{rule.base_name}': {rule.directory} (subdirectories: {rule.search_subdirectories}, skip_dirs: {skip_subdirectories}, skip_patterns: {skip_file_patterns})")
+            search_locations.append(f"Rule '{rule.target_table}': {rule.directory} (subdirectories: {rule.search_subdirectories}, skip_dirs: {skip_subdirectories}, skip_patterns: {skip_file_patterns})")
 
             if rule.search_subdirectories:
                 search_pattern = rule_source_dir.rglob('*')
@@ -2230,7 +2248,7 @@ class PostgresLoader:
                                 skip_file = True
                                 break
                         except re.error as e:
-                            logger.warning(f"Invalid skip pattern '{skip_pattern}' for rule '{rule.base_name}': {e}")
+                            logger.warning(f"Invalid skip pattern '{skip_pattern}' for rule '{rule.target_table}': {e}")
                     if skip_file:
                         continue
 
@@ -2265,12 +2283,12 @@ class PostgresLoader:
                         sheet_config=rule.sheet_config
                     )
                     all_potential_file_contexts.append(file_context)
-                    logger.info(f"File '{filename}' MATCHED pattern '{rule.file_pattern}' for rule '{rule.base_name}'")
+                    logger.info(f"Rule '{rule.target_table}': File '{filename}' MATCHED pattern '{rule.file_pattern}'")
                 else:
                     files_skipped_pattern += 1
-                    logger.debug(f"Skipping file '{filename}' - does not match pattern '{rule.file_pattern}'")
+                    logger.debug(f"Rule '{rule.target_table}': Skipping file '{filename}' - does not match pattern '{rule.file_pattern}'")
             
-            logger.info(f"Rule '{rule.base_name}': found {files_found} matching files, "
+            logger.info(f"Rule '{rule.target_table}': found {files_found} matching files, "
                        f"skipped {files_skipped_pattern} non-matching files, "
                        f"{files_skipped_directory} files in excluded directories, "
                        f"{files_skipped_skip_pattern} files matching skip patterns")
@@ -2334,7 +2352,7 @@ class PostgresLoader:
                             )
                             setattr(file_context, attr_name, True)
                             all_potential_file_contexts.append(file_context)
-                            logger.info(f"Found {category} file: {filename} matched by rule '{matching_rule.base_name}' (pattern: '{matching_rule.file_pattern}')")
+                            logger.info(f"Found {category} file: {filename} matched by rule '{matching_rule.target_table}'")
                         else:
                             unmatched_files += 1
                             logger.warning(f"File {filename} in {category} directory did not match any rule. Skipping.")
@@ -2380,32 +2398,85 @@ class PostgresLoader:
     # ---------------------------
     # Enhanced processing with detailed OS logging
     # ---------------------------
-    def process_files(self) -> Dict[str, int]:
+    def process_files(self) -> Dict[str, Any]:
         start_time = time.time()
         logger.info(f"=== STARTING RUN {self.run_id} ===")
         logger.info(f"Configuration: batch_size={self.config.batch_size}, delete_files={self.delete_files}")
 
         file_contexts = self.get_files_to_process()
-        processed, failed = 0, 0
+        
+        # Group files by rule for counting
+        files_by_rule = {}
+        for fc in file_contexts:
+            if fc.target_table not in files_by_rule:
+                files_by_rule[fc.target_table] = []
+            files_by_rule[fc.target_table].append(fc)
+        
+        # Log rule counts
+        for rule_name, rule_files in files_by_rule.items():
+            logger.info(f"Rule '{rule_name}': {len(rule_files)} files to process")
 
-        logger.info(f"Processing {len(file_contexts)} files...")
+        processed = 0
+        failed = 0
+        results_by_rule = {}
 
-        for i, fc in enumerate(file_contexts):
-            logger.info(f"Processing file {i+1}/{len(file_contexts)}: {fc.filename}")
-            if self.process_file(fc):
-                processed += 1
-                logger.info(f"Successfully processed: {fc.filename}")
-            else:
-                failed += 1
-                logger.error(f"Failed to process: {fc.filename}")
+        # Process files rule by rule
+        for rule_name, rule_files in files_by_rule.items():
+            logger.info(f"=== Processing rule: {rule_name} ({len(rule_files)} files) ===")
+            
+            rule_processed = 0
+            rule_failed = 0
+            
+            for i, fc in enumerate(rule_files):
+                logger.info(f"Rule '{rule_name}': Processing file {i+1}/{len(rule_files)}: {fc.filename}")
+                
+                if self.process_file(fc):
+                    rule_processed += 1
+                    logger.info(f"Rule '{rule_name}': Successfully processed: {fc.filename} ({i+1}/{len(rule_files)})")
+                else:
+                    rule_failed += 1
+                    logger.error(f"Rule '{rule_name}': Failed to process: {fc.filename} ({i+1}/{len(rule_files)})")
+                    
+                    # If rule becomes blocked during processing, stop processing this rule
+                    if fc.target_table in self.blocked_rules:
+                        logger.error(f"Rule '{rule_name}' blocked during processing. Skipping remaining files for this rule.")
+                        break
+            
+            results_by_rule[rule_name] = {
+                "processed": rule_processed,
+                "failed": rule_failed,
+                "total": len(rule_files)
+            }
+            
+            processed += rule_processed
+            failed += rule_failed
+            
+            logger.info(f"=== Rule '{rule_name}' completed: {rule_processed}/{len(rule_files)} processed, {rule_failed} failed ===")
 
         duration = time.time() - start_time
-        logger.info(f"Run completed. Processed: {processed}, Failed: {failed}, Duration: {duration:.1f}s")
+        
+        # Summary log
+        logger.info("=" * 60)
+        logger.info("RUN SUMMARY BY RULE:")
+        for rule_name, stats in results_by_rule.items():
+            logger.info(f"  Rule '{rule_name}': {stats['processed']}/{stats['total']} files processed, {stats['failed']} failed")
+        logger.info("=" * 60)
+        
+        logger.info(f"Run completed. Total processed: {processed}, Total failed: {failed}, Duration: {duration:.1f}s")
         logger.info(f"=== RUN {self.run_id} COMPLETED ===")
 
-        return {"processed": processed, "failed": failed}
+        return {
+            "total_processed": processed,
+            "total_failed": failed,
+            "by_rule": results_by_rule
+        }
 
     def process_file(self, file_context: FileContext) -> bool:
+        # Check if rule is blocked before processing
+        if file_context.target_table in self.blocked_rules:
+            logger.error(f"Skipping {file_context.filename} because rule '{file_context.target_table}' is blocked: {self.blocked_rules[file_context.target_table]}")
+            return False
+            
         try:
             mapping = pd.read_csv(file_context.mapping_filepath)
             if not self.db_manager.create_table_if_not_exists(file_context.target_table, mapping):
@@ -2617,13 +2688,18 @@ class PostgresLoader:
 
     def _process_dataframe(self, df: pd.DataFrame, file_context: FileContext) -> bool:
         """Common dataframe processing logic for all file types."""
+        # Check if rule is blocked
+        if file_context.target_table in self.blocked_rules:
+            logger.error(f"Rule '{file_context.target_table}' is blocked: {self.blocked_rules[file_context.target_table]}")
+            return False
+
         # Automatically remove metadata columns if present
         df = self._drop_metadata_columns(df)
 
-        # Handle new columns (this will update mapping and may block)
-        should_block = self._handle_new_columns(df, file_context)
+        # Handle new columns (this will update mapping and may block the entire rule)
+        should_block, error_msg = self._handle_new_columns(df, file_context)
         if should_block:
-            logger.error(f"New columns detected in {file_context.filename}. Please configure them in {file_context.mapping_filepath}.")
+            # Rule is now blocked - don't process any files for this rule
             return False
 
         # Check and add configured columns if necessary
@@ -3028,7 +3104,11 @@ if __name__ == "__main__":
         )
 
         result = loader.process_files()
-        print(f"Processed: {result['processed']}, Failed: {result['failed']}")
+        print(f"\nProcessing Results:")
+        print(f"Total Processed: {result['total_processed']}, Total Failed: {result['total_failed']}")
+        print("\nBy Rule:")
+        for rule_name, stats in result['by_rule'].items():
+            print(f"  {rule_name}: {stats['processed']}/{stats['total']} files processed, {stats['failed']} failed")
         
     except KeyboardInterrupt:
         logger.info("Processing interrupted by user")
