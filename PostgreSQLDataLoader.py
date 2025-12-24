@@ -2,6 +2,7 @@
 """
 PostgreSQL Data Loader - Enhanced with Failed Rows Recovery & Precise OS Error Logging
 Organized Directory Structure: rules/ for configs, inputs/ for data
+WITH SMART AUDIT MODE: Intelligent deduplication without exporting duplicates
 """
 
 import os
@@ -63,21 +64,21 @@ METADATA_COLUMNS = {
 }
 
 # ===========================
-# Configure logging - ENHANCED with OS error details
+# Configure logging - ENHANCED with OS error details AND SIMPLE COLORED OUTPUT
 # ===========================
 def setup_logging():
-    """Setup logging with timestamped log files in logs directory with enhanced OS error details."""
+    """Setup logging with timestamped log files in logs directory with simple colored console output."""
     global LOG_DIR
     
     # Create logs directory if it doesn't exist
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
-        print(f"Log directory created/verified: {LOG_DIR}")
+        print(f"\033[37mLog directory created/verified: {LOG_DIR}\033[0m")
     except OSError as e:
-        print(f"CRITICAL: Failed to create log directory {LOG_DIR}: {e}")
+        print(f"\033[31mCRITICAL: Failed to create log directory {LOG_DIR}: {e}\033[0m")
         # Fallback to current directory
         LOG_DIR = "."
-        print(f"Using fallback log directory: {LOG_DIR}")
+        print(f"\033[33mUsing fallback log directory: {LOG_DIR}\033[0m")
     
     # Generate log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -85,15 +86,60 @@ def setup_logging():
     log_filepath = os.path.join(LOG_DIR, log_filename)
     
     try:
-        # Configure logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
-            handlers=[
-                logging.FileHandler(log_filepath, encoding='utf-8'),
-                logging.StreamHandler()
-            ]
-        )
+        # Format de base pour tous les handlers
+        log_format = "%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+        
+        # Créer le logger racine
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        
+        # Handler pour le fichier (sans couleur)
+        file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter(log_format))
+        
+        # Handler pour la console (avec couleur simple)
+        console_handler = logging.StreamHandler()
+        
+        # Fonction simple pour ajouter des couleurs
+        def add_color_to_message(record):
+            """Ajoute des couleurs ANSI au message selon le niveau."""
+            colors = {
+                'DEBUG': '\033[36m',     # Cyan
+                'INFO': '\033[37m',      # Blanc
+                'WARNING': '\033[33m',   # Jaune
+                'ERROR': '\033[31m',     # Rouge
+                'CRITICAL': '\033[41m\033[37m'  # Fond rouge, texte blanc
+            }
+            
+            color = colors.get(record.levelname, '\033[0m')
+            reset = '\033[0m'
+            
+            # Formater le message original
+            message = logging.Formatter(log_format).format(record)
+            
+            # Retourner avec couleur
+            return f"{color}{message}{reset}"
+        
+        # Surcharger le format du handler console
+        console_handler.setFormatter(logging.Formatter())
+        original_emit = console_handler.emit
+        
+        def colored_emit(record):
+            # N'utiliser print que pour les messages de log, pas pour les exceptions
+            try:
+                print(add_color_to_message(record))
+            except Exception:
+                # Fallback en cas d'erreur
+                original_emit(record)
+        
+        console_handler.emit = colored_emit
+        
+        # Ajouter les handlers
+        root_logger.addHandler(file_handler)
+        root_logger.addHandler(console_handler)
+        
+        # Désactiver la propagation
+        root_logger.propagate = False
         
         # Also create a symlink to the latest log for easy access
         latest_log_path = os.path.join(LOG_DIR, "processing_latest.log")
@@ -101,12 +147,12 @@ def setup_logging():
             if os.path.exists(latest_log_path):
                 os.remove(latest_log_path)
             os.symlink(log_filepath, latest_log_path)
-            print(f"Created latest log symlink: {latest_log_path} -> {log_filepath}")
+            print(f"\033[37mCreated latest log symlink: {latest_log_path} -> {log_filepath}\033[0m")
         except OSError as e:
-            print(f"Could not create latest log symlink: {e} (errno: {e.errno})")
+            print(f"\033[33mCould not create latest log symlink: {e} (errno: {e.errno})\033[0m")
             
     except Exception as e:
-        print(f"CRITICAL: Logging setup failed: {e}")
+        print(f"\033[31mCRITICAL: Logging setup failed: {e}\033[0m")
         # Basic fallback logging
         logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     
@@ -418,8 +464,9 @@ class FileProcessingRule:
         except re.error as e:
             errors.append(f"Invalid regex pattern '{self.file_pattern}': {e}")
             
-        if self.mode and self.mode not in ["cancel_and_replace", "audit", "insert"]:
-            errors.append(f"Invalid mode: {self.mode}")
+        # MODIFIED: Ajout du mode "smart_audit"
+        if self.mode and self.mode not in ["cancel_and_replace", "audit", "insert", "smart_audit"]:
+            errors.append(f"Invalid mode: {self.mode}. Must be one of: insert, audit, smart_audit, cancel_and_replace")
         if self.date_from_filename_col_name and not self.date_format:
             errors.append("date_format is required when date_from_filename_col_name is specified")
         
@@ -665,6 +712,28 @@ class DatabaseManager:
             return set()
         except Exception as e:
             logger.error(f"Failed to get existing hashes for {source_filename}: {e}")
+            return set()
+
+    def get_all_existing_hashes(self, target_table: str) -> set:
+        """
+        Get ALL content hashes from the table, regardless of source_filename.
+        Used for smart_audit mode to detect duplicates across all files.
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    query = sql.SQL("SELECT DISTINCT content_hash FROM {}").format(
+                        sql.Identifier(target_table)
+                    )
+                    cursor.execute(query)
+                    hashes = {row[0] for row in cursor.fetchall()}
+                    logger.debug(f"Retrieved {len(hashes)} existing hashes from table {target_table}")
+                    return hashes
+        except psycopg2.errors.UndefinedTable:
+            logger.debug(f"Table {target_table} does not exist")
+            return set()
+        except Exception as e:
+            logger.error(f"Failed to get all existing hashes for {target_table}: {e}")
             return set()
 
     def column_exists(self, table_name: str, column_name: str) -> bool:
@@ -1127,7 +1196,7 @@ class FileProcessor:
         return False
 
 # ===========================
-# Enhanced Main Loader with OS error logging
+# Enhanced Main Loader with SMART AUDIT MODE
 # ===========================
 class PostgresLoader:
     """Main loader class with organized directory structure and enhanced error handling."""
@@ -1156,7 +1225,7 @@ class PostgresLoader:
         # Enhanced lock management
         self.lock_manager = LockManager(timeout=self.config.lock_timeout)
         
-        # NEW: Track blocked rules
+        # Track blocked rules
         self.blocked_rules = {}  # rule_name -> reason for blocking
         
         # Create organized directory structure
@@ -1170,42 +1239,48 @@ class PostgresLoader:
 
     @log_os_operations
     def _create_directory_structure(self):
-        """Create the organized directory structure with detailed logging."""
+        """Create the organized directory structure with accurate logging."""
         directories = [
-            # Configuration directories
             "rules",
-            
-            # Input data directories
             "inputs/sales_data",
             "inputs/inventory_data", 
             "inputs/weekly_reports",
-            
-            # Processing directories
             DUPLICATES_ROOT_DIR,
             DUPLICATES_TO_PROCESS_DIR,
             DUPLICATES_PROCESSED_DIR,
             FORMAT_CONFLICT_DIR,
             FORMAT_CONFLICT_TO_PROCESS_DIR,
             FORMAT_CONFLICT_PROCESSED_DIR,
-            
-            # Failed rows directories
             FAILED_ROWS_DIR,
             FAILED_ROWS_TO_PROCESS_DIR,
             FAILED_ROWS_PROCESSED_DIR,
-
-            # Log directory
             LOG_DIR
         ]
 
+        created_count = 0
+        existing_count = 0
+        
         for directory in directories:
-            try:
-                os.makedirs(directory, exist_ok=True)
-                logger.debug(f"Directory created/verified: {directory}")
-            except OSError as e:
-                logger.error(f"Failed to create directory {directory}: {e} (errno: {e.errno})")
-                raise
-
-        logger.info("Directory structure created successfully")
+            if os.path.exists(directory):
+                logger.debug(f"Directory exists: {directory}")
+                existing_count += 1
+            else:
+                try:
+                    os.makedirs(directory)
+                    logger.info(f"Directory created: {directory}")
+                    created_count += 1
+                except OSError as e:
+                    logger.error(f"Failed to create directory {directory}: {e}")
+                    raise
+        
+        # Résumé avec couleur
+        summary_msg = f"Directory structure: {created_count} created, {existing_count} already existed"
+        if created_count > 0:
+            print(f"\033[37m{summary_msg}\033[0m")
+        else:
+            print(f"\033[33m{summary_msg} (nothing new)\033[0m")
+        
+        return created_count, existing_count
 
     # ---------------------------
     # Enhanced Locking with signal handling
@@ -1289,7 +1364,7 @@ class PostgresLoader:
                         search_subdirectories=rule_data.get('search_subdirectories', True),
                         sheet_config=rule_data.get('sheet_config', {}),
                         mapping_file=mapping_file,
-                        # NEW: Load skip configurations
+                        # Load skip configurations
                         skip_subdirectories=rule_data.get('skip_subdirectories', []),
                         skip_file_patterns=rule_data.get('skip_file_patterns', [])
                     )
@@ -1357,7 +1432,7 @@ class PostgresLoader:
         return 'TEXT'
 
     # ---------------------------
-    # Setup validation & mapping generation - FIXED VERSION
+    # Setup validation & mapping generation
     # ---------------------------
     def _validate_setup(self) -> None:
         logger.info("Validating setup with organized directory structure...")
@@ -1607,7 +1682,7 @@ class PostgresLoader:
             ]).to_csv(mapping_filepath, index=False)
 
     # ---------------------------
-    # New columns handling - UPDATED to block entire rule
+    # New columns handling
     # ---------------------------
     def _handle_new_columns(self, df: pd.DataFrame, file_context: FileContext) -> Tuple[bool, str]:
         """
@@ -1785,7 +1860,7 @@ class PostgresLoader:
         return clean_df, conflict_df
 
     # ---------------------------
-    # Export helpers - ENHANCED: Use same file format as original with OS logging
+    # Export helpers
     # ---------------------------
     def _get_conflict_guidance(self, conflict_type: str) -> str:
         guidance = {
@@ -2166,8 +2241,371 @@ class PostgresLoader:
         }
         return error_code in retryable_codes
 
+    # =================================================================
+    # MODIFICATIONS POUR LE MODE SMART AUDIT
+    # =================================================================
+    
+    def process_file(self, file_context: FileContext) -> bool:
+        """Process a file with the appropriate mode."""
+        # Check if rule is blocked before processing
+        if file_context.target_table in self.blocked_rules:
+            logger.error(f"Skipping {file_context.filename} because rule '{file_context.target_table}' is blocked: {self.blocked_rules[file_context.target_table]}")
+            return False
+            
+        try:
+            mapping = pd.read_csv(file_context.mapping_filepath)
+            if not self.db_manager.create_table_if_not_exists(file_context.target_table, mapping):
+                logger.error(f"Cannot process {file_context.filename}: Table {file_context.target_table} creation failed")
+                return False
+
+            # Determine processing mode
+            if file_context.mode == "smart_audit":
+                logger.info(f"Processing with SMART AUDIT mode: {file_context.filename}")
+                return self._process_smart_audit(file_context)
+                
+            elif file_context.mode == "audit":
+                logger.info(f"Processing with CLASSIC AUDIT mode: {file_context.filename}")
+                return self._process_classic_audit(file_context)
+                
+            elif file_context.mode == "cancel_and_replace":
+                logger.info(f"Processing with CANCEL AND REPLACE mode: {file_context.filename}")
+                return self._process_cancel_and_replace(file_context)
+                
+            else:  # Default to "insert"
+                logger.info(f"Processing with INSERT mode: {file_context.filename}")
+                return self._process_insert(file_context)
+
+        except Exception as e:
+            logger.error(f"Error processing {file_context.filename}: {e}", exc_info=True)
+            return False
+    
+    def _process_smart_audit(self, file_context: FileContext) -> bool:
+        """
+        SMART AUDIT MODE:
+        1. Check if file has changed (binary hash comparison)
+        2. If unchanged → skip completely (no processing)
+        3. If changed → detect only NEW lines (10% that changed)
+        4. Insert only new lines, silently ignore duplicates (90% unchanged)
+        5. No export of duplicates to duplicates/ folder
+        """
+        logger.info(f"=== SMART AUDIT: Processing {file_context.filename} ===")
+        
+        # 1. Check if file needs processing (binary hash comparison)
+        if self.progress_tracker:
+            needs_processing = self.progress_tracker.needs_processing(file_context.filepath, file_context)
+            if not needs_processing:
+                logger.info(f"SMART AUDIT: File unchanged (hash match): {file_context.filename}")
+                return True  # File unchanged = success (nothing to do)
+        
+        # 2. Load the file
+        df = self.file_processor.load_file(
+            file_context.filepath,
+            file_context.start_row,
+            file_context.start_col,
+            file_context.sheet_config
+        )
+        
+        if df is None or df.empty:
+            logger.warning(f"SMART AUDIT: File is empty: {file_context.filename}")
+            return True
+        
+        # 3. Remove metadata columns if present
+        df = self._drop_metadata_columns(df)
+        
+        # 4. Handle new columns (may block the rule)
+        should_block, error_msg = self._handle_new_columns(df, file_context)
+        if should_block:
+            return False
+        
+        # 5. Check and add configured columns
+        if not self._check_and_add_configured_columns(file_context):
+            logger.error(f"SMART AUDIT: Failed to add configured columns to table {file_context.target_table}")
+            return False
+        
+        mapping = pd.read_csv(file_context.mapping_filepath)
+        
+        # 6. Validate data types and separate format conflicts
+        clean_df, format_conflict_df = self._validate_data_types(df, mapping, file_context.filename)
+        
+        # 7. Export format conflicts if any
+        if not format_conflict_df.empty:
+            self._export_format_conflicts(format_conflict_df, file_context)
+            logger.warning(f"SMART AUDIT: Found {len(format_conflict_df)} format conflicts in {file_context.filename}")
+        
+        if clean_df.empty:
+            logger.warning(f"SMART AUDIT: No valid rows to process in {file_context.filename}")
+            # Still mark as processed in progress tracker
+            if self.progress_tracker:
+                self.progress_tracker.mark_processed(file_context.filepath, file_context)
+            return True
+        
+        # 8. Calculate row hashes (exclude temporal columns)
+        hash_exclude = set(file_context.hash_exclude_columns or [])
+        clean_df['content_hash'] = self.file_processor.calculate_row_hashes(
+            clean_df, 
+            hash_exclude, 
+            file_context.source_sheet
+        )
+        
+        # 9. Get ALL existing hashes from the table (not just for this filename)
+        existing_hashes = self.db_manager.get_all_existing_hashes(file_context.target_table)
+        
+        # 10. Filter to keep only NEW rows
+        is_new = ~clean_df['content_hash'].isin(existing_hashes)
+        new_df = clean_df[is_new]
+        duplicate_df = clean_df[~is_new]
+        
+        # 11. Log statistics (no export of duplicates)
+        if not duplicate_df.empty:
+            duplicate_count = len(duplicate_df)
+            logger.info(f"SMART AUDIT: Found {duplicate_count} duplicate rows in {file_context.filename} (silently ignored)")
+        
+        if new_df.empty:
+            logger.info(f"SMART AUDIT: No new rows to insert from {file_context.filename}")
+            # Mark as processed in progress tracker
+            if self.progress_tracker:
+                self.progress_tracker.mark_processed(file_context.filepath, file_context)
+            return True
+        
+        # 12. Prepare for insertion: rename columns to target names
+        mapping_df = pd.read_csv(file_context.mapping_filepath)
+        col_map = {row['RawColumn']: row['TargetColumn'] for _, row in mapping_df.iterrows() if row['data_source'] == 'file'}
+        insert_df = new_df.copy()
+        insert_df = insert_df.rename(columns=col_map)
+        
+        # 13. Add system columns
+        insert_df['loaded_timestamp'] = datetime.now().replace(microsecond=0)
+        insert_df['source_filename'] = file_context.filename
+        insert_df['operation'] = 'smart_audit'  # Special operation code
+        
+        # 14. Insert into database
+        try:
+            success = self._bulk_insert_to_db(insert_df, file_context.target_table)
+            
+            # Mark as processed in progress tracker if successful
+            if success and self.progress_tracker:
+                self.progress_tracker.mark_processed(file_context.filepath, file_context)
+            
+            # Handle file deletion if configured
+            if success and self.delete_files:
+                try:
+                    os.remove(file_context.filepath)
+                    logger.info(f"SMART AUDIT: Deleted source file: {file_context.filepath}")
+                except Exception as e:
+                    logger.warning(f"SMART AUDIT: Could not delete file {file_context.filepath}: {e}")
+            
+            if success:
+                logger.info(f"SMART AUDIT: Successfully inserted {len(new_df)} new rows from {file_context.filename}")
+            else:
+                logger.error(f"SMART AUDIT: Failed to insert rows from {file_context.filename}")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"SMART AUDIT: Load failed for {file_context.filename}: {e}", exc_info=True)
+            return False
+    
+    def _process_classic_audit(self, file_context: FileContext) -> bool:
+        """
+        CLASSIC AUDIT MODE (original behavior - kept for compatibility):
+        1. Check if file exists in database with similar timestamp
+        2. If yes → skip completely
+        3. If no → process as normal insert
+        """
+        logger.info(f"=== CLASSIC AUDIT: Processing {file_context.filename} ===")
+        
+        # Check if file exists in database (timestamp-based check)
+        try:
+            if self.db_manager.file_exists_in_db(
+                file_context.target_table, 
+                file_context.file_modified_timestamp, 
+                file_context.filename
+            ):
+                logger.info(f"CLASSIC AUDIT: Skipping {file_context.filename} (already processed with similar timestamp)")
+                # Still mark as processed in progress tracker
+                if self.progress_tracker:
+                    self.progress_tracker.mark_processed(file_context.filepath, file_context)
+                return True  # File already processed = success
+        except Exception as e:
+            logger.error(f"CLASSIC AUDIT: Audit check failed for {file_context.filename}: {e}")
+        
+        # If not processed, proceed with normal insert mode
+        return self._process_insert(file_context)
+    
+    def _process_cancel_and_replace(self, file_context: FileContext) -> bool:
+        """
+        CANCEL AND REPLACE MODE:
+        1. Delete all rows with this source_filename
+        2. Process file as normal insert
+        """
+        logger.info(f"=== CANCEL AND REPLACE: Processing {file_context.filename} ===")
+        
+        # Delete existing rows for this filename
+        try:
+            with self.db_manager.get_connection() as conn:
+                deleted_count = self.db_manager.delete_by_source_filename(
+                    conn, 
+                    file_context.target_table, 
+                    file_context.filename
+                )
+                logger.info(f"CANCEL AND REPLACE: Deleted {deleted_count} existing rows for {file_context.filename}")
+        except Exception as e:
+            logger.error(f"CANCEL AND REPLACE: Failed to delete existing rows for {file_context.filename}: {e}")
+        
+        # Process file as normal insert
+        return self._process_insert(file_context)
+    
+    def _process_insert(self, file_context: FileContext) -> bool:
+        """
+        INSERT MODE (normal processing):
+        1. Load and process file
+        2. Detect duplicates and export them to duplicates/ folder
+        3. Insert only new rows
+        """
+        logger.info(f"=== INSERT: Processing {file_context.filename} ===")
+        
+        # Load the file
+        df = self.file_processor.load_file(
+            file_context.filepath,
+            file_context.start_row,
+            file_context.start_col,
+            file_context.sheet_config
+        )
+        
+        if df is None or df.empty:
+            logger.warning(f"INSERT: File is empty: {file_context.filename}")
+            return True
+        
+        # Process through the standard dataframe processing
+        success = self._process_dataframe(df, file_context)
+        
+        # Mark as processed in progress tracker if successful
+        if success and self.progress_tracker:
+            self.progress_tracker.mark_processed(file_context.filepath, file_context)
+        
+        # Handle file deletion if configured
+        if success and self.delete_files and not any([
+            file_context.is_duplicate,
+            getattr(file_context, 'is_format_conflict', False),
+            getattr(file_context, 'is_failed_row', False)
+        ]):
+            try:
+                os.remove(file_context.filepath)
+                logger.info(f"INSERT: Deleted source file: {file_context.filepath}")
+            except Exception as e:
+                logger.warning(f"INSERT: Could not delete file {file_context.filepath}: {e}")
+        
+        return success
+
     # ---------------------------
-    # Enhanced file discovery with OS logging - FIXED PATTERN FILTERING
+    # Main dataframe processing (used by insert mode)
+    # ---------------------------
+    def _process_dataframe(self, df: pd.DataFrame, file_context: FileContext) -> bool:
+        """Common dataframe processing logic for insert mode."""
+        # Check if rule is blocked
+        if file_context.target_table in self.blocked_rules:
+            logger.error(f"Rule '{file_context.target_table}' is blocked: {self.blocked_rules[file_context.target_table]}")
+            return False
+
+        # Automatically remove metadata columns if present
+        df = self._drop_metadata_columns(df)
+
+        # Handle new columns (this will update mapping and may block the entire rule)
+        should_block, error_msg = self._handle_new_columns(df, file_context)
+        if should_block:
+            # Rule is now blocked - don't process any files for this rule
+            return False
+
+        # Check and add configured columns if necessary
+        if not self._check_and_add_configured_columns(file_context):
+            logger.error(f"Failed to add configured columns to table {file_context.target_table}")
+            return False
+
+        mapping = pd.read_csv(file_context.mapping_filepath)
+
+        # Validate data types and separate format conflicts
+        clean_df, format_conflict_df = self._validate_data_types(df, mapping, file_context.filename)
+
+        # Export format conflicts if any
+        if not format_conflict_df.empty:
+            self._export_format_conflicts(format_conflict_df, file_context)
+            logger.warning(f"Found {len(format_conflict_df)} format conflicts in {file_context.filename}. These rows have been exported for manual correction.")
+
+        if clean_df.empty:
+            logger.warning(f"No valid rows to process in {file_context.filename} after filtering format conflicts")
+            return True
+
+        # Drop metadata columns again on clean_df (just in case)
+        clean_df = self._drop_metadata_columns(clean_df)
+
+        # Calculate hashes
+        hash_exclude = set(file_context.hash_exclude_columns or [])
+        clean_df['content_hash'] = self.file_processor.calculate_row_hashes(
+            clean_df, 
+            hash_exclude, 
+            file_context.source_sheet
+        )
+
+        # Enhanced duplicate detection
+        existing_hashes = self.db_manager.get_existing_hashes(file_context.target_table, file_context.filename)
+        logger.info(f"Checking {len(clean_df)} rows against {len(existing_hashes)} existing hashes for {file_context.filename}")
+        
+        duplicates_mask = clean_df['content_hash'].isin(existing_hashes)
+        duplicates_df = clean_df[duplicates_mask]
+        unique_df = clean_df[~duplicates_mask]
+
+        if not duplicates_df.empty:
+            # Enhanced duplicate analysis
+            duplicate_count = len(duplicates_df)
+            logger.info(f"Found {duplicate_count} potential duplicates in {file_context.filename}")
+            
+            # Export duplicates for manual resolution
+            self._export_duplicates(duplicates_df, file_context)
+            logger.warning(f"Exported {duplicate_count} duplicate rows from {file_context.filename} to {DUPLICATES_ROOT_DIR}")
+
+        if unique_df.empty:
+            logger.info(f"No new unique rows to load from {file_context.filename}")
+            return True
+
+        # Prepare for DB insert: rename columns to target names based on mapping
+        mapping_df = pd.read_csv(file_context.mapping_filepath)
+        col_map = {row['RawColumn']: row['TargetColumn'] for _, row in mapping_df.iterrows() if row['data_source'] == 'file'}
+        insert_df = unique_df.copy()
+        insert_df = insert_df.rename(columns=col_map)
+
+        # Add system columns
+        insert_df['loaded_timestamp'] = datetime.now().replace(microsecond=0)
+        insert_df['source_filename'] = file_context.filename
+        insert_df['operation'] = file_context.mode or 'insert'
+
+        # Load into DB with enhanced error handling
+        try:
+            success = self._bulk_insert_to_db(insert_df, file_context.target_table)
+            
+            # If there were failed rows during insertion, export them
+            if not success and hasattr(self, '_last_insertion_errors') and self._last_insertion_errors:
+                self._export_failed_rows(unique_df, self._last_insertion_errors, file_context, file_context.target_table)
+                
+            return success
+        except Exception as e:
+            logger.error(f"Load failed for {file_context.filename}: {e}", exc_info=True)
+            return False
+
+    # ---------------------------
+    # Metadata removal helper
+    # ---------------------------
+    def _drop_metadata_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Remove loader-generated metadata columns if present."""
+        if df is None or df.empty:
+            return df
+        drop_cols = [c for c in df.columns if c in METADATA_COLUMNS]
+        if drop_cols:
+            logger.debug(f"Dropping metadata columns: {drop_cols}")
+            df = df.drop(columns=drop_cols, errors="ignore")
+        return df
+
+    # ---------------------------
+    # File discovery and processing methods
     # ---------------------------
     def get_files_to_process(self) -> List[FileContext]:
         all_potential_file_contexts = []
@@ -2191,7 +2629,7 @@ class PostgresLoader:
                 logger.error(f"Mapping file not found: {mapping_filepath}. Skipping rule '{rule.target_table}'.")
                 continue
 
-            # NEW: Get skip patterns from rule configuration
+            # Get skip patterns from rule configuration
             skip_subdirectories = getattr(rule, 'skip_subdirectories', [])
             skip_file_patterns = getattr(rule, 'skip_file_patterns', [])
             
@@ -2237,7 +2675,7 @@ class PostgresLoader:
 
                 filename = file_path.name
                 
-                # NEW: Check if file matches any skip patterns
+                # Check if file matches any skip patterns
                 if skip_file_patterns:
                     skip_file = False
                     for skip_pattern in skip_file_patterns:
@@ -2367,37 +2805,45 @@ class PostgresLoader:
         logger.info(f"Found {len(all_potential_file_contexts)} total potential files, applying filters...")
 
         for fc in all_potential_file_contexts:
+            # Special processing files always get processed
             if any([fc.is_duplicate, getattr(fc, 'is_format_conflict', False), getattr(fc, 'is_failed_row', False)]):
                 files_to_process.append(fc)
                 logger.debug(f"Including {fc.filename} (special processing file)")
                 continue
 
-            if self.progress_tracker:
-                needs_processing = self.progress_tracker.needs_processing(fc.filepath, fc)
-                if not needs_processing:
-                    logger.info(f"Skipping unchanged file: {fc.filename}")
-                    skipped_files += 1
-                    continue
-
-            if fc.mode == "audit" and not any([fc.is_duplicate, getattr(fc, 'is_format_conflict', False), getattr(fc, 'is_failed_row', False)]):
+            # For smart_audit mode, we rely on progress_tracker for file-level deduplication
+            # For classic audit mode, we do the database check
+            if fc.mode == "smart_audit":
+                if self.progress_tracker:
+                    needs_processing = self.progress_tracker.needs_processing(fc.filepath, fc)
+                    if not needs_processing:
+                        logger.info(f"SMART AUDIT: Skipping unchanged file: {fc.filename}")
+                        skipped_files += 1
+                        continue
+            elif fc.mode == "audit":
                 try:
                     if self.db_manager.file_exists_in_db(fc.target_table, fc.file_modified_timestamp, fc.filename):
-                        logger.info(f"Skipping {fc.filename}: Content unchanged in database")
+                        logger.info(f"CLASSIC AUDIT: Skipping {fc.filename}: Already processed with similar timestamp")
                         if self.progress_tracker:
                             self.progress_tracker.mark_processed(fc.filepath, fc)
                         skipped_files += 1
                         continue
                 except Exception as e:
                     logger.error(f"Audit check failed for {fc.filename}: {e}")
+            else:
+                # For insert and cancel_and_replace modes, use progress tracker if enabled
+                if self.progress_tracker:
+                    needs_processing = self.progress_tracker.needs_processing(fc.filepath, fc)
+                    if not needs_processing:
+                        logger.info(f"INSERT/CANCEL: Skipping unchanged file: {fc.filename}")
+                        skipped_files += 1
+                        continue
 
             files_to_process.append(fc)
 
         logger.info(f"File discovery completed: {len(files_to_process)} to process, {skipped_files} skipped")
         return files_to_process
 
-    # ---------------------------
-    # Enhanced processing with detailed OS logging
-    # ---------------------------
     def process_files(self) -> Dict[str, Any]:
         start_time = time.time()
         logger.info(f"=== STARTING RUN {self.run_id} ===")
@@ -2471,372 +2917,8 @@ class PostgresLoader:
             "by_rule": results_by_rule
         }
 
-    def process_file(self, file_context: FileContext) -> bool:
-        # Check if rule is blocked before processing
-        if file_context.target_table in self.blocked_rules:
-            logger.error(f"Skipping {file_context.filename} because rule '{file_context.target_table}' is blocked: {self.blocked_rules[file_context.target_table]}")
-            return False
-            
-        try:
-            mapping = pd.read_csv(file_context.mapping_filepath)
-            if not self.db_manager.create_table_if_not_exists(file_context.target_table, mapping):
-                logger.error(f"Cannot process {file_context.filename}: Table {file_context.target_table} creation failed")
-                return False
-
-            # CONSISTENT PROCESSING FLOW FOR ALL TYPES
-            if getattr(file_context, 'is_failed_row', False):
-                logger.info(f"Processing failed rows file: {file_context.filename}")
-                success = self._process_failed_rows_file(file_context)
-                # ENHANCED: Move to processed folder regardless of success/failure
-                if success:
-                    self._move_to_processed(file_context.filepath, "failed_rows")
-                else:
-                    logger.error(f"Failed to process failed rows file: {file_context.filename}")
-                    
-            elif file_context.is_duplicate:
-                logger.info(f"Processing duplicate file: {file_context.filename}")
-                success = self._process_duplicate_file(file_context)
-                # ENHANCED: Move to processed folder regardless of success/failure
-                if success:
-                    self._move_to_processed(file_context.filepath, "duplicates")
-                else:
-                    logger.error(f"Failed to process duplicate file: {file_context.filename}")
-                    
-            elif getattr(file_context, 'is_format_conflict', False):
-                logger.info(f"Processing format conflict file: {file_context.filename}")
-                success = self._process_format_conflict_file(file_context)
-                # ENHANCED: Move to processed folder regardless of success/failure
-                if success:
-                    self._move_to_processed(file_context.filepath, "format_conflict")
-                else:
-                    logger.error(f"Failed to process format conflict file: {file_context.filename}")
-                    
-            else:
-                # Check if it's an Excel file with multi-sheet configuration
-                if (file_context.filepath.suffix.lower() in ['.xlsx', '.xls'] and 
-                    file_context.sheet_config.get('processing_method', 'specific') != 'specific'):
-                    logger.info(f"Processing multi-sheet Excel file: {file_context.filename}")
-                    success = self._process_excel_file(file_context)
-                else:
-                    logger.info(f"Processing: {file_context.filename} -> Table: {file_context.target_table}")
-                    success = self._process_single_sheet_file(file_context)
-
-                # ENHANCED: Mark progress for regular files
-                if success and self.progress_tracker:
-                    self.progress_tracker.mark_processed(file_context.filepath, file_context)
-
-            # Optionally delete file after successful processing (only for original files)
-            if success and self.delete_files and not any([
-                file_context.is_duplicate,
-                getattr(file_context, 'is_format_conflict', False),
-                getattr(file_context, 'is_failed_row', False)
-            ]):
-                try:
-                    os.remove(file_context.filepath)
-                    logger.info(f"Deleted source file: {file_context.filepath}")
-                except Exception as e:
-                    logger.warning(f"Could not delete file {file_context.filepath}: {e}")
-
-            return success
-
-        except Exception as e:
-            logger.error(f"Error processing {file_context.filename}: {e}", exc_info=True)
-            return False
-
     # ---------------------------
-    # Metadata removal helper
-    # ---------------------------
-    def _drop_metadata_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Remove loader-generated metadata columns if present."""
-        if df is None or df.empty:
-            return df
-        drop_cols = [c for c in df.columns if c in METADATA_COLUMNS]
-        if drop_cols:
-            logger.debug(f"Dropping metadata columns: {drop_cols}")
-            df = df.drop(columns=drop_cols, errors="ignore")
-        return df
-
-    # ---------------------------
-    # Multi-sheet Excel processing
-    # ---------------------------
-    def _process_excel_file(self, file_context: FileContext) -> bool:
-        """Process Excel file with multiple sheets."""
-        processing_method = file_context.sheet_config.get('processing_method', 'specific')
-        success = True
-        sheets_processed = 0
-        total_sheets = 0
-        
-        if processing_method == 'specific':
-            # Single sheet processing
-            sheet_result = self._process_single_excel_sheet(file_context)
-            if sheet_result:
-                sheets_processed += 1
-            else:
-                success = False
-        else:
-            # Multiple sheet processing
-            sheet_names = self._get_sheets_to_process(file_context)
-            total_sheets = len(sheet_names)
-            
-            for sheet_name in sheet_names:
-                logger.info(f"Processing sheet {sheets_processed + 1}/{total_sheets}: '{sheet_name}'")
-                
-                # Create a copy of file_context for this sheet
-                sheet_context = dataclasses.replace(file_context)
-                sheet_context.source_sheet = sheet_name
-                sheet_context.sheet_config['specific_sheet'] = sheet_name
-                sheet_context.sheet_config['processing_method'] = 'specific'
-                
-                sheet_result = self._process_single_excel_sheet(sheet_context)
-                
-                if sheet_result:
-                    sheets_processed += 1
-                else:
-                    success = False
-                    logger.error(f"Failed to process sheet '{sheet_name}'")
-        
-        if sheets_processed == 0 and total_sheets > 0:
-            if self.config.treat_empty_as_error:
-                logger.error(f"All {total_sheets} sheets in {file_context.filename} were empty")
-                success = False
-            else:
-                logger.warning(f"All {total_sheets} sheets in {file_context.filename} were empty")
-                success = True  # Empty sheets are not considered errors
-        
-        logger.info(f"Processed {sheets_processed} sheet(s) from {file_context.filename}")
-        return success
-
-    def _get_sheets_to_process(self, file_context: FileContext) -> List[str]:
-        """Get list of sheet names to process based on configuration."""
-        file_processor = FileProcessor(self.config)
-        all_sheets = file_processor.get_excel_sheet_names(file_context.filepath)
-        
-        processing_method = file_context.sheet_config.get('processing_method', 'specific')
-        
-        if processing_method == 'multiple':
-            specified_sheets = file_context.sheet_config.get('sheet_names', [])
-            return [sheet for sheet in specified_sheets if sheet in all_sheets]
-        
-        elif processing_method == 'all':
-            return all_sheets
-        
-        elif processing_method == 'pattern':
-            pattern = file_context.sheet_config.get('sheet_name_pattern', '.*')
-            return [sheet for sheet in all_sheets if re.match(pattern, sheet)]
-        
-        else:
-            return [file_context.sheet_config.get('specific_sheet', 'Sheet1')]
-
-    def _process_single_excel_sheet(self, file_context: FileContext) -> bool:
-        """Process a single sheet from an Excel file."""
-        original_filename = file_context.filename
-        
-        try:
-            df = self.file_processor.load_file(
-                file_context.filepath,
-                file_context.start_row,
-                file_context.start_col,
-                file_context.sheet_config
-            )
-            
-            # Enhanced empty detection
-            if df is None or df.empty:
-                if file_context.source_sheet:
-                    logger.warning(f"Sheet contains no data: {file_context.filename} - {file_context.source_sheet}")
-                else:
-                    logger.warning(f"File contains no data: {file_context.filename}")
-                
-                # For empty sheets, we still want to mark as processed if using progress tracking
-                if self.progress_tracker and not any([
-                    getattr(file_context, 'is_format_conflict', False),
-                    getattr(file_context, 'is_failed_row', False)
-                ]):
-                    self.progress_tracker.mark_processed(file_context.filepath, file_context)
-                
-                return True  # Success - empty sheets are not errors
-            
-            # Add sheet name to filename for tracking
-            if file_context.source_sheet:
-                file_context.filename = f"{original_filename}::{file_context.source_sheet}"
-            
-            # Process the dataframe
-            result = self._process_dataframe(df, file_context)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error processing sheet {file_context.source_sheet}: {e}")
-            return False
-        finally:
-            # Restore original filename
-            file_context.filename = original_filename
-
-    def _process_single_sheet_file(self, file_context: FileContext) -> bool:
-        """Process non-Excel files or single-sheet Excel files."""
-        df = self.file_processor.load_file(
-            file_context.filepath,
-            file_context.start_row,
-            file_context.start_col,
-            file_context.sheet_config
-        )
-        
-        if df is None or df.empty:
-            logger.warning(f"File is empty: {file_context.filename}")
-            return True
-        
-        return self._process_dataframe(df, file_context)
-
-    def _process_dataframe(self, df: pd.DataFrame, file_context: FileContext) -> bool:
-        """Common dataframe processing logic for all file types."""
-        # Check if rule is blocked
-        if file_context.target_table in self.blocked_rules:
-            logger.error(f"Rule '{file_context.target_table}' is blocked: {self.blocked_rules[file_context.target_table]}")
-            return False
-
-        # Automatically remove metadata columns if present
-        df = self._drop_metadata_columns(df)
-
-        # Handle new columns (this will update mapping and may block the entire rule)
-        should_block, error_msg = self._handle_new_columns(df, file_context)
-        if should_block:
-            # Rule is now blocked - don't process any files for this rule
-            return False
-
-        # Check and add configured columns if necessary
-        if not self._check_and_add_configured_columns(file_context):
-            logger.error(f"Failed to add configured columns to table {file_context.target_table}")
-            return False
-
-        mapping = pd.read_csv(file_context.mapping_filepath)
-
-        # Validate data types and separate format conflicts
-        clean_df, format_conflict_df = self._validate_data_types(df, mapping, file_context.filename)
-
-        # Export format conflicts if any
-        if not format_conflict_df.empty:
-            self._export_format_conflicts(format_conflict_df, file_context)
-            logger.warning(f"Found {len(format_conflict_df)} format conflicts in {file_context.filename}. These rows have been exported for manual correction.")
-
-        if clean_df.empty:
-            logger.warning(f"No valid rows to process in {file_context.filename} after filtering format conflicts")
-            return True
-
-        # Drop metadata columns again on clean_df (just in case)
-        clean_df = self._drop_metadata_columns(clean_df)
-
-        # Calculate hashes - FIXED: Include sheet context for proper duplicate detection
-        hash_exclude = set(file_context.hash_exclude_columns or [])
-        clean_df['content_hash'] = self.file_processor.calculate_row_hashes(
-            clean_df, 
-            hash_exclude, 
-            file_context.source_sheet  # Pass sheet name for context
-        )
-
-        # Enhanced duplicate detection with better logging
-        existing_hashes = self.db_manager.get_existing_hashes(file_context.target_table, file_context.filename)
-        logger.info(f"Checking {len(clean_df)} rows against {len(existing_hashes)} existing hashes for {file_context.filename}")
-        
-        duplicates_mask = clean_df['content_hash'].isin(existing_hashes)
-        duplicates_df = clean_df[duplicates_mask]
-        unique_df = clean_df[~duplicates_mask]
-
-        if not duplicates_df.empty:
-            # Enhanced duplicate analysis
-            duplicate_count = len(duplicates_df)
-            logger.info(f"Found {duplicate_count} potential duplicates in {file_context.filename}")
-            
-            # Export duplicates for manual resolution
-            self._export_duplicates(duplicates_df, file_context)
-            logger.warning(f"Exported {duplicate_count} duplicate rows from {file_context.filename} to {DUPLICATES_ROOT_DIR}")
-
-        if unique_df.empty:
-            logger.info(f"No new unique rows to load from {file_context.filename}")
-            return True
-
-        # Prepare for DB insert: rename columns to target names based on mapping
-        mapping_df = pd.read_csv(file_context.mapping_filepath)
-        col_map = {row['RawColumn']: row['TargetColumn'] for _, row in mapping_df.iterrows() if row['data_source'] == 'file'}
-        insert_df = unique_df.copy()
-        insert_df = insert_df.rename(columns=col_map)
-
-        # Add system columns - FIXED: Remove milliseconds from timestamp
-        insert_df['loaded_timestamp'] = datetime.now().replace(microsecond=0)  # No milliseconds
-        insert_df['source_filename'] = file_context.filename  # Includes sheet name if applicable
-        insert_df['operation'] = file_context.mode
-
-        # Load into DB with enhanced error handling
-        try:
-            success = self._bulk_insert_to_db(insert_df, file_context.target_table)
-            
-            # If there were failed rows during insertion, export them
-            if not success and hasattr(self, '_last_insertion_errors') and self._last_insertion_errors:
-                self._export_failed_rows(unique_df, self._last_insertion_errors, file_context, file_context.target_table)
-                
-            return success
-        except Exception as e:
-            logger.error(f"Load failed for {file_context.filename}: {e}", exc_info=True)
-            return False
-
-    # ---------------------------
-    # Reprocessing methods - UPDATED for consistency
-    # ---------------------------
-    def _process_duplicate_file(self, file_context: FileContext) -> bool:
-        """Process a resolved duplicate file placed in duplicates/to_process/"""
-        df = self.file_processor.load_file(
-            file_context.filepath,
-            file_context.start_row,
-            file_context.start_col,
-            file_context.sheet_config
-        )
-        if df is None or df.empty:
-            logger.warning(f"Duplicate file is empty: {file_context.filename}")
-            return True
-
-        # Remove metadata automatically - CONSISTENT BEHAVIOR
-        df = self._drop_metadata_columns(df)
-
-        # Proceed as a regular file from here
-        return self._process_dataframe(df, file_context)
-
-    def _process_format_conflict_file(self, file_context: FileContext) -> bool:
-        """Process a corrected format conflict file placed in format_conflict/to_process/"""
-        df = self.file_processor.load_file(
-            file_context.filepath,
-            file_context.start_row,
-            file_context.start_col,
-            file_context.sheet_config
-        )
-        if df is None or df.empty:
-            logger.warning(f"Format conflict file is empty: {file_context.filename}")
-            return True
-
-        # Remove metadata automatically - CONSISTENT BEHAVIOR
-        df = self._drop_metadata_columns(df)
-
-        # Proceed as regular file
-        return self._process_dataframe(df, file_context)
-
-    def _process_failed_rows_file(self, file_context: FileContext) -> bool:
-        """Process a corrected failed rows file - CONSISTENT with duplicates/conflicts."""
-        df = self.file_processor.load_file(
-            file_context.filepath,
-            file_context.start_row,
-            file_context.start_col,
-            file_context.sheet_config
-        )
-        
-        if df is None or df.empty:
-            logger.warning(f"Failed rows file is empty: {file_context.filename}")
-            return True
-
-        # CONSISTENT: Auto-remove metadata, just like duplicates/conflicts!
-        df = self._drop_metadata_columns(df)
-        
-        # Process as regular file
-        return self._process_dataframe(df, file_context)
-
-    # ---------------------------
-    # Utility methods - ENHANCED: Better file movement with OS logging
+    # Utility methods
     # ---------------------------
     @log_os_operations
     def _move_to_processed(self, filepath: Path, category: str):
@@ -2933,9 +3015,9 @@ def create_sample_configs():
         }
         with open(GLOBAL_CONFIG_FILE, 'w') as f:
             yaml.dump(global_config, f)
-        logger.info(f"Created sample global config: {GLOBAL_CONFIG_FILE}")
+        print(f"\033[37mCreated sample global config: {GLOBAL_CONFIG_FILE}\033[0m")
     else:
-        logger.info(f"Global config already exists: {GLOBAL_CONFIG_FILE}")
+        print(f"\033[33mGlobal config already exists: {GLOBAL_CONFIG_FILE}\033[0m")
 
     rules = {
         "sales_rule.yaml": {
@@ -2979,7 +3061,7 @@ def create_sample_configs():
             "date_format": "%Y%m%d",
             "start_row": 0,
             "start_col": 0,
-            "mode": "insert",
+            "mode": "smart_audit",  # ← NOUVEAU MODE SMART AUDIT
             "date_from_filename_col_name": "report_date",
             "hash_exclude_columns": [],
             "search_subdirectories": True,
@@ -2997,9 +3079,9 @@ def create_sample_configs():
         if not rule_path.exists():
             with open(rule_path, 'w') as f:
                 yaml.dump(rule_data, f)
-            logger.info(f"Created sample rule file: {rule_path}")
+            print(f"\033[37mCreated sample rule file: {rule_path}\033[0m")
         else:
-            logger.info(f"Rule file already exists: {rule_path}")
+            print(f"\033[33mRule file already exists: {rule_path}\033[0m")
 
     today = datetime.today()
     dates = [today - pd.Timedelta(days=7 * i) for i in range(4)]
@@ -3014,7 +3096,7 @@ def create_sample_configs():
                 "Customer": ["Alice", "Bob", "Charlie"],
                 "Amount": [120.5, 85.0, 42.75]
             }).to_csv(sample_sales_file, index=False)
-            logger.info(f"Created sample sales file: {sample_sales_file}")
+            print(f"\033[37mCreated sample sales file: {sample_sales_file}\033[0m")
 
         # Inventory data (Excel with multiple sheets)
         sample_inventory_file = Path("inputs/inventory_data") / f"inventory_{date_str}.xlsx"
@@ -3030,7 +3112,7 @@ def create_sample_configs():
                     "ItemName": ["Product A", "Product B", "Product C"],
                     "Stock": [30, 40, 60]
                 }).to_excel(writer, sheet_name='Sheet2', index=False)
-            logger.info(f"Created sample inventory file with multiple sheets: {sample_inventory_file}")
+            print(f"\033[37mCreated sample inventory file with multiple sheets: {sample_inventory_file}\033[0m")
 
         # Weekly reports (Excel with multiple sheets)
         sample_weekly_file = Path("inputs/weekly_reports") / f"weekly_{date_str}.xlsx"
@@ -3045,7 +3127,7 @@ def create_sample_configs():
                     "Department": ["Sales", "Marketing", "Operations"],
                     "WeeklyTotal": [500, 300, 400]
                 }).to_excel(writer, sheet_name='Departments', index=False)
-            logger.info(f"Created sample weekly report file with multiple sheets: {sample_weekly_file}")
+            print(f"\033[37mCreated sample weekly report file with multiple sheets: {sample_weekly_file}\033[0m")
 
 # ===========================
 # Enhanced main entrypoint with OS error handling
@@ -3061,21 +3143,20 @@ if __name__ == "__main__":
                 lock_age = current_time - lock_time
                 
                 if lock_age > 3600:
-                    logger.warning(f"Removing stale lock file (age: {lock_age:.1f}s)")
+                    print(f"\033[33mRemoving stale lock file (age: {lock_age:.1f}s)\033[0m")
                     try:
                         os.remove(LOCK_FILE)
-                        print("Removed stale lock file")
+                        print("\033[33mRemoved stale lock file\033[0m")
                     except OSError as e:
-                        logger.warning(f"Could not remove stale lock file: {e}")
+                        print(f"\033[33mCould not remove stale lock file: {e}\033[0m")
             except Exception as e:
-                logger.warning(f"Error checking lock file: {e}")
+                print(f"\033[33mError checking lock file: {e}\033[0m")
 
         # Remove pattern extraction functionality completely
-        # If user tries to use pattern extraction, direct them to the utility script
         if len(sys.argv) > 1 and any(arg in sys.argv for arg in ['--extract-pattern', '--pattern', '-p']):
-            print("Pattern extraction has been moved to a separate utility script.")
-            print("Please use: python pattern_utils.py <filename1> [filename2 ...]")
-            print("Example: python pattern_utils.py ghy_20250505.xlsx")
+            print("\033[33mPattern extraction has been moved to a separate utility script.\033[0m")
+            print("\033[33mPlease use: python pattern_utils.py <filename1> [filename2 ...]\033[0m")
+            print("\033[33mExample: python pattern_utils.py ghy_20250505.xlsx\033[0m")
             sys.exit(1)
 
         # NEW: Only create sample configs if explicitly enabled or first run
@@ -3083,7 +3164,10 @@ if __name__ == "__main__":
         
         if not config_exists:
             # First run - create sample configs
+            print("\033[37mFirst run detected. Creating sample configuration files...\033[0m")
             create_sample_configs()
+            print("\033[37mSample configuration created. Please configure global_loader_config.yaml with your database settings.\033[0m")
+            sys.exit(0)
         else:
             # Check if sample generation is enabled in config
             try:
@@ -3092,6 +3176,7 @@ if __name__ == "__main__":
                     generate_samples = config_data.get('generate_sample_files', False)
                     
                 if generate_samples:
+                    print("\033[37mSample file generation is enabled. Creating/updating sample files...\033[0m")
                     create_sample_configs()
                 else:
                     logger.info("Sample file generation is disabled in config")
@@ -3104,22 +3189,24 @@ if __name__ == "__main__":
         )
 
         result = loader.process_files()
-        print(f"\nProcessing Results:")
-        print(f"Total Processed: {result['total_processed']}, Total Failed: {result['total_failed']}")
-        print("\nBy Rule:")
+        print(f"\n\033[37mProcessing Results:\033[0m")
+        print(f"\033[37mTotal Processed: {result['total_processed']}, Total Failed: {result['total_failed']}\033[0m")
+        
+        print("\n\033[37mBy Rule:\033[0m")
         for rule_name, stats in result['by_rule'].items():
-            print(f"  {rule_name}: {stats['processed']}/{stats['total']} files processed, {stats['failed']} failed")
+            color = "\033[32m" if stats['failed'] == 0 else "\033[31m"
+            print(f"  {rule_name}: {stats['processed']}/{stats['total']} files processed, {color}{stats['failed']} failed\033[0m")
         
     except KeyboardInterrupt:
         logger.info("Processing interrupted by user")
-        print("Processing interrupted by user")
+        print("\n\033[33mProcessing interrupted by user\033[0m")
         if loader:
             loader.cleanup()
         sys.exit(1)
     except Exception as e:
         logger.critical(f"Fatal error during processing: {type(e).__name__}: {e}")
-        print(f"Processing failed: {e}")
-        print("Check processing.log for details")
+        print(f"\n\033[31mProcessing failed: {e}\033[0m")
+        print("\033[33mCheck processing.log for details\033[0m")
         if loader:
             loader.cleanup()
         sys.exit(1)
