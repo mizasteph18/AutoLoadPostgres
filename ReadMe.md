@@ -1,148 +1,44 @@
-PostgreSQL Data Loader - Complete User Guide (Enhanced with Failed Rows Recovery & Timestamped Logs)
+Format recommandé : .md (Markdown)
 
-🚀 Overview & Enhanced Directory Structure
+Voici le fichier Markdown complet que tu peux sauvegarder dans PyCharm :
 
-Enhanced Organized Directory Structure with Failed Rows Recovery & Logs
+Nom du fichier : PostgreSQL_Data_Loader_User_Guide.md
 
-```
-data_loader/
-├── loader_script.py              # Main loader script
-├── global_loader_config.yaml     # Global configuration
-├── processing_progress.json      # Progress tracking
-├── loader.lock                   # Lock file (auto-generated)
-├── logs/                         # 📁 NEW: Timestamped log files
-│   ├── processing_20231201_143022.log
-│   ├── processing_20231201_153045.log
-│   └── processing_latest.log     # Symlink to latest log
-├── rules/                        # ✅ ALL configuration files
-│   ├── sales_rule.yaml
-│   ├── inventory_rule.yaml
-│   ├── weekly_rule.yaml
-│   ├── sales_mapping.csv         # ✅ Mapping files in rules folder
-│   ├── inventory_mapping.csv
-│   └── weekly_mapping.csv
-├── inputs/                       # ✅ ALL input data directories
-│   ├── sales_data/
-│   ├── inventory_data/
-│   ├── weekly_reports/
-│   └── custom_reports/
-├── duplicates/                   # Auto-generated directories
-│   ├── to_process/               # ✅ CORRECTED: Files to reprocess
-│   └── processed/                # ✅ ENHANCED: Moved after processing
-├── format_conflict/              # Auto-generated directories
-│   ├── to_process/               # ✅ CORRECTED: Files to reprocess
-│   └── processed/                # ✅ ENHANCED: Moved after processing
-└── failed_rows/                  # ✅ NEW: Failed rows recovery
-    ├── to_process/               # ✅ CORRECTED: Files to reprocess
-    └── processed/                # ✅ ENHANCED: Moved after processing
-```
+```markdown
+# PostgreSQL Data Loader - Complete User Guide
 
-📋 Quick Decision Guide
-
-Use this flowchart to navigate to the right sections:
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                    Getting Started                                                          │
-└─────────────────────────────────────────────────┬───────────────────────────────────────────┘
-                                                  │
-┌─────────────────────────────────────────────────▼───────────────────────────────────────────┐
-│  What type of data are you loading?                                                        │
-└─────────────────────────────────┬─────────────────────────────────┬─────────────────────────┘
-                                  │                                 │
-              ┌───────────────────▼─────────────────┐ ┌─────────────▼─────────────┐ ┌─────────▼─────────┐
-              │ Single File                         │ │ Multi-Sheet               │ │ Complex Data     │
-              │ CSV/JSON                            │ │ Excel                     │ │ Issues           │
-              └───────────────────┬─────────────────┘ └─────────────┬─────────────┘ └─────────┬─────────┘
-                                  │                                 │                         │
-              ┌───────────────────▼─────────────────┐ ┌─────────────▼─────────────┐ ┌─────────▼─────────┐
-              │ Section 4                          │ │ Section 5                 │ │ Sections          │
-              │ Basic Config                       │ │ Excel Multi-Sheet         │ │ 7-10 Conflict     │
-              │                                    │ │                           │ │ Resolution        │
-              └────────────────────────────────────┘ └───────────────────────────┘ └───────────────────┘
-```
-
-✨ Key Benefits of Enhanced Structure
-
-✅ Simplified Setup
-
-· One configuration location: All rules and mappings in rules/ folder
-· One data location: All input files in inputs/ folder
-· Clear separation: No mixing of configs and data
-· Organized logs: All logs in logs/ folder with timestamps
-
-✅ Enhanced Error Recovery
-
-· NEW: Failed rows recovery with automatic export and reprocessing
-· Duplicate detection and resolution
-· Format conflict handling
-· Consistent reprocessing workflow across all error types
-· Automatic file movement to processed/ folders
-
-✅ Enhanced Logging
-
-· 📁 NEW: Logs stored in logs/ directory
-· ⏰ Timestamped filenames: processing_YYYYMMDD_HHMMSS.log
-· 🔗 Symlink: processing_latest.log always points to most recent log
-· 📊 Comprehensive tracking: All processing activities logged
-
-✅ Easier Maintenance
-
-· Backup strategy: Backup rules/ folder separately from inputs/
-· Version control: Only rules/ folder needs version control
-· Permissions: Different permissions for configs vs data
-· Log management: Organized log files with automatic rotation
-
-✅ Better Organization
-
-· Scalable: Easy to add new data sources
-· Clear structure: Intuitive for new team members
-· Standardized: Consistent across projects
-
-✅ Enhanced Security
-
-· Isolate credentials: Database config in rules/ folder
-· Access control: Different access for configs vs data files
-· Audit trail: Clear separation for compliance
+## Table of Contents
+1. [Installation & Setup](#installation-setup)
+2. [Directory Structure](#directory-structure)
+3. [Configuration](#configuration)
+4. [Multi-Sheet Excel Configuration](#multi-sheet-excel-configuration)
+5. [Processing Modes](#processing-modes)
+6. [Enhanced Logging with Colors](#enhanced-logging-with-colors)
+7. [Error Recovery](#error-recovery)
+8. [Error Reference Table](#error-reference-table)
+9. [Troubleshooting](#troubleshooting)
+10. [Best Practices](#best-practices)
+11. [Command Reference](#command-reference)
 
 ---
 
-1. Installation & Setup (Enhanced)
+## 1. Installation & Setup
 
-Quick Installation
+### Quick Installation
 
 ```bash
 # Install required packages
 pip install pandas psycopg2-binary pyyaml numpy openpyxl
 
-# Create enhanced organized directory structure
+# Create organized directory structure
 mkdir -p rules inputs/sales_data inputs/inventory_data inputs/weekly_reports
 mkdir -p duplicates/to_process duplicates/processed
 mkdir -p format_conflict/to_process format_conflict/processed
-mkdir -p failed_rows/to_process failed_rows/processed  # ✅ NEW
-mkdir -p logs  # 📁 NEW: Log directory
+mkdir -p failed_rows/to_process failed_rows/processed
+mkdir -p logs
 
 # Generate sample configuration
 python loader_script.py
-```
-
-Enhanced Initial Setup Verification
-
-```bash
-# Test the enhanced directory structure
-ls -la rules/ inputs/ failed_rows/ logs/
-
-# Test database connection
-python loader_script.py --test-connection
-
-# Extract file naming patterns
-python loader_script.py --extract-pattern "sales_20230101.csv"
-
-# Run initial setup
-python loader_script.py --setup
-
-# Check latest logs
-tail -f logs/processing_latest.log
 ```
 
 Setup Script
@@ -153,861 +49,469 @@ setup_directories.sh
 #!/bin/bash
 echo "Creating enhanced PostgreSQL Data Loader directory structure..."
 
-# Configuration directories
 mkdir -p rules
-
-# Input data directories
 mkdir -p inputs/sales_data
 mkdir -p inputs/inventory_data
 mkdir -p inputs/weekly_reports
 mkdir -p inputs/regional_reports
 mkdir -p inputs/customer_data
-
-# Processing directories
 mkdir -p duplicates/to_process
 mkdir -p duplicates/processed
 mkdir -p format_conflict/to_process
 mkdir -p format_conflict/processed
 mkdir -p failed_rows/to_process
 mkdir -p failed_rows/processed
-
-# 📁 NEW: Log directory
 mkdir -p logs
 
 echo "Enhanced directory structure created successfully!"
-echo "Logs will be stored in: logs/processing_YYYYMMDD_HHMMSS.log"
+echo "Logs will be stored in: logs/"
 ```
 
 ---
 
-2. Configuration (Enhanced Structure)
+2. Directory Structure
+
+```
+data_loader/
+├── loader_script.py
+├── global_loader_config.yaml
+├── processing_progress.json
+├── loader.lock
+├── rules/
+│   ├── sales_rule.yaml
+│   ├── inventory_rule.yaml
+│   ├── weekly_rule.yaml
+│   ├── sales_mapping.csv
+│   ├── inventory_mapping.csv
+│   └── weekly_mapping.csv
+├── inputs/
+│   ├── sales_data/
+│   ├── inventory_data/
+│   └── weekly_reports/
+├── duplicates/
+│   ├── to_process/
+│   └── processed/
+├── format_conflict/
+│   ├── to_process/
+│   └── processed/
+├── failed_rows/
+│   ├── to_process/
+│   └── processed/
+└── logs/
+    ├── processing_*.log
+    └── processing_latest.log
+```
+
+---
+
+3. Configuration
 
 Global Configuration (global_loader_config.yaml)
 
 ```yaml
-# Database Connection
 dbname: "your_database_name"
 user: "your_username"
 password: "your_password"
 host: "localhost"
 port: 5432
-
-# Processing Settings
 batch_size: 1000
 max_connections: 5
+min_connections: 1
 retry_attempts: 3
-
-# Features
 enable_progress_tracking: true
 enable_data_validation: true
 auto_add_columns: true
-
-# File Handling
+timestamp_tolerance_seconds: 1.0
 delete_files: "N"
 lock_timeout: 3600
-
-# Empty Sheet Handling
 skip_empty_sheets: true
 warn_on_empty_sheets: true
 treat_empty_as_error: false
-
-# ✅ ENHANCED: Failed Rows Recovery Settings
 enable_row_level_recovery: true
-fail_on_partial_insert: false    # If true, fails when any rows fail
+fail_on_partial_insert: false
 retry_on_deadlock: true
-max_retry_delay: 30              # Maximum seconds between retries
-enable_batch_validation: true    # Pre-validate data before insert
-chunk_size: 100                  # Process rows in chunks
-max_chunk_failures: 5            # Stop if too many chunks fail
+max_retry_delay: 30
+enable_batch_validation: true
+chunk_size: 100
+max_chunk_failures: 5
+generate_sample_files: false
+global_hash_exclude_columns: []
 ```
 
-Enhanced Processing Rules (Now in rules/ folder)
+Global Configuration Parameters
 
-Basic Rule Example (rules/sales_rule.yaml)
+Parameter Description Default
+dbname PostgreSQL database name "your_database_name"
+user PostgreSQL username "your_username"
+password PostgreSQL password "your_password"
+host PostgreSQL server hostname "localhost"
+port PostgreSQL server port 5432
+batch_size Rows processed per batch 1000
+max_connections Maximum pool connections 5
+min_connections Minimum pool connections 1
+retry_attempts Retry attempts for failures 3
+enable_progress_tracking Track processed files true
+enable_data_validation Validate data before insertion true
+auto_add_columns Auto-add new columns true
+timestamp_tolerance_seconds Time tolerance for processed files 1.0
+delete_files Delete source after processing "N"
+lock_timeout Lock timeout in seconds 3600
+skip_empty_sheets Skip empty Excel sheets true
+warn_on_empty_sheets Warn about empty sheets true
+treat_empty_as_error Treat empty as error false
+enable_row_level_recovery Row-level recovery true
+fail_on_partial_insert Fail on partial insert false
+retry_on_deadlock Retry on deadlock true
+max_retry_delay Max retry delay (seconds) 30
+enable_batch_validation Batch validation true
+chunk_size Chunk size for batch 100
+max_chunk_failures Max chunk failures 5
+generate_sample_files Generate sample files false
+global_hash_exclude_columns Columns excluded from hash []
 
-```yaml
-base_name: "sales"
-directory: "inputs/sales_data"           # ✅ Updated path
-file_pattern: "sales_\\d{8}\\.csv"
-date_format: "%Y%m%d"
-start_row: 0
-start_col: 0
-mode: "insert"
-date_from_filename_col_name: "file_date"
-hash_exclude_columns: []
-search_subdirectories: true
-mapping_file: "rules/sales_mapping.csv"  # ✅ Mapping file in rules folder
-```
+Processing Rule Parameters
 
-Multi-Sheet Example (rules/inventory_rule.yaml)
-
-```yaml
-base_name: "inventory"
-directory: "inputs/inventory_data"       # ✅ Updated path
-file_pattern: "inventory_\\d{8}\\.xlsx"
-date_format: "%Y%m%d"
-start_row: 0
-start_col: 0
-mode: "insert"
-date_from_filename_col_name: "file_date"
-hash_exclude_columns: []
-search_subdirectories: true
-sheet_config:
-  processing_method: "multiple"
-  sheet_names: 
-    - "Sheet1"
-    - "Sheet2"
-mapping_file: "rules/inventory_mapping.csv"  # ✅ Mapping file in rules
-```
-
-All Sheets Example (rules/weekly_rule.yaml)
-
-```yaml
-base_name: "weekly_reports"
-directory: "inputs/weekly_reports"
-file_pattern: "weekly_\\d{8}\\.xlsx"
-date_format: "%Y%m%d"
-start_row: 0
-start_col: 0
-mode: "insert"
-date_from_filename_col_name: "report_date"
-hash_exclude_columns: []
-search_subdirectories: true
-sheet_config:
-  processing_method: "all"
-mapping_file: "rules/weekly_mapping.csv"
-```
-
-Mapping Files
-
-Sales Mapping (rules/sales_mapping.csv)
-
-```csv
-RawColumn,TargetColumn,DataType,LoadFlag,IndexColumn,data_source,definition,order
-OrderID,orderid,INTEGER,Y,Y,file,,0
-Customer,customer,TEXT,Y,N,file,,1
-Amount,amount,NUMERIC,Y,N,file,,2
-loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,,3
-source_filename,source_filename,TEXT,Y,N,system,,4
-content_hash,content_hash,TEXT,Y,N,system,,5
-operation,operation,TEXT,Y,N,system,,6
-```
-
-Inventory Mapping (rules/inventory_mapping.csv)
-
-```csv
-RawColumn,TargetColumn,DataType,LoadFlag,IndexColumn,data_source,definition,order
-ItemID,itemid,INTEGER,Y,Y,file,,0
-ItemName,itemname,TEXT,Y,N,file,,1
-Stock,stock,INTEGER,Y,N,file,,2
-_source_sheet,_source_sheet,TEXT,Y,N,file,,3
-loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,,4
-source_filename,source_filename,TEXT,Y,N,system,,5
-content_hash,content_hash,TEXT,Y,N,system,,6
-operation,operation,TEXT,Y,N,system,,7
-```
-
----
-
-3. Input Data Organization (Enhanced)
-
-Enhanced Input Directory Structure
-
-```
-inputs/
-├── sales_data/           # Sales-related files
-│   ├── sales_20230101.csv
-│   ├── sales_20230102.csv
-│   └── archive/          # Optional subdirectories
-├── inventory_data/       # Inventory files
-│   ├── inventory_20230101.xlsx
-│   └── inventory_20230102.xlsx
-├── weekly_reports/       # Weekly reports
-│   ├── weekly_20230101.xlsx
-│   └── weekly_20230108.xlsx
-├── customer_data/        # Additional data sources
-└── financial_data/
-```
-
-File Placement Examples
-
-Sales Data:
-
-· ✅ inputs/sales_data/sales_20230101.csv
-· ✅ inputs/sales_data/sales_20230102.csv
-
-Inventory Data:
-
-· ✅ inputs/inventory_data/inventory_20230101.xlsx
-· ✅ inputs/inventory_data/monthly/inventory_january.xlsx (with subdirectories)
+Parameter Description Example
+base_name Target table name "sales"
+directory Source directory "inputs/sales_data"
+file_pattern Regex pattern "sales_\d{8}.csv"
+date_format Date format in filename "%Y%m%d"
+start_row Starting row (0-based) 0
+start_col Starting column (0-based) 0
+mode Processing mode "insert"
+date_from_filename_col_name Column for extracted date "file_date"
+hash_exclude_columns Columns excluded from hash []
+search_subdirectories Search in subdirectories true
+skip_subdirectories Subdirectories to skip ["archive"]
+skip_file_patterns File patterns to skip [".test."]
+mapping_file Mapping file path "rules/sales_mapping.csv"
 
 ---
 
 4. Multi-Sheet Excel Configuration
 
-Configuration Decision Tree
+Configuration Methods
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│          Excel File Processing Method Selection                                             │
-└─────────────────────────────────────────────────┬───────────────────────────────────────────┘
-                                                  │
-        How many sheets do you need to process?
-                                                  │
-        ┌─────────────────────┬───────────────────┬─────────────────────────────────────────┐
-        │                     │                   │                                         │
-    ┌───▼─────────────┐   ┌───▼─────────────┐   ┌─▼─────────────┐   ┌───▼─────────────┐
-    │ One             │   │ Few             │   │ All           │   │ By              │
-    │ Sheet           │   │ Named           │   │ Sheets        │   │ Pattern         │
-    └───┬─────────────┘   │ Sheets          │   └─┬─────────────┘   └───┬─────────────┘
-        │                 └───┬─────────────┘     │                     │
-    ┌───▼─────────────┐   ┌───▼─────────────┐   ┌─▼─────────────┐   ┌───▼─────────────┐
-    │ specific        │   │ multiple        │   │ all           │   │ pattern         │
-    │                 │   │                 │   │               │   │                 │
-    └─────────────────┘   └─────────────────┘   └───────────────┘   └─────────────────┘
-```
-
-Single Sheet Processing
+Single Sheet:
 
 ```yaml
 sheet_config:
   processing_method: "specific"
-  specific_sheet: "Monthly Data"  # Process only this sheet
+  specific_sheet: "Monthly Data"
 ```
 
-Multiple Named Sheets - IMPORTANT: LIST FORMAT REQUIRED
+Multiple Sheets:
 
 ```yaml
 sheet_config:
   processing_method: "multiple"
   sheet_names: 
     - "Sales"
-    - "Inventory" 
-    - "Expenses"   # ✅ CORRECT: List format with dashes
+    - "Inventory"
+    - "Expenses"
 ```
 
-All Sheets
+All Sheets:
 
 ```yaml
 sheet_config:
-  processing_method: "all"  # Process every sheet in the file
+  processing_method: "all"
 ```
 
-Pattern-Based Sheet Selection
+Pattern-Based:
 
 ```yaml
 sheet_config:
   processing_method: "pattern"
-  sheet_name_pattern: "Region_.*"  # Process sheets like "Region_North", "Region_South"
-```
-
-YAML List Format Guide
-
-✅ CORRECT Formats:
-
-```yaml
-# Multi-line list (recommended)
-sheet_names: 
-  - "Sheet1"
-  - "Sheet2"
-  - "Sheet3"
-
-# Inline list (also works)
-sheet_names: ["Sheet1", "Sheet2", "Sheet3"]
-```
-
-❌ INCORRECT Formats:
-
-```yaml
-# This will NOT work - not a list
-sheet_names: "Sheet1, Sheet2, Sheet3"
-
-# This will NOT work - comma-separated string
-sheet_names: "Sheet1", "Sheet2", "Sheet3"
+  sheet_name_pattern: "Region_.*"
 ```
 
 ---
 
 5. Processing Modes
 
-Mode Selection Guide
+Processing Modes Comparison
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│              Processing Mode Selection                                                      │
-└─────────────────────────────────────────────────┬───────────────────────────────────────────┘
-                                                  │
-        What should happen when reprocessing the same file?
-                                                  │
-        ┌─────────────────────┬───────────────────┬─────────────────────────────────────────┐
-        │                     │                   │                                         │
-    ┌───▼─────────────┐   ┌───▼─────────────┐   ┌─▼─────────────┐   ┌───▼─────────────┐
-    │ Insert          │   │ Replace         │   │ Audit         │   │ Complex         │
-    │ Only            │   │ Entire          │   │ Check         │   │ Update          │
-    │ New             │   │ File            │   │ Only          │   │ Logic           │
-    └───┬─────────────┘   └───┬─────────────┘   └─┬─────────────┘   └───┬─────────────┘
-        │                     │                   │                     │
-    ┌───▼─────────────┐   ┌───▼─────────────┐   ┌─▼─────────────┐   ┌───▼─────────────┐
-    │ insert          │   │ cancel_and      │   │ audit         │   │ Custom          │
-    │                 │   │ replace         │   │               │   │ Script          │
-    │                 │   │                 │   │               │   │ Required        │
-    └─────────────────┘   └─────────────────┘   └───────────────┘   └─────────────────┘
-```
+Mode Duplicates Exported Files Skipped Performance Best Use Case
+INSERT YES (duplicates/) NO Standard Initial load, new data
+CANCEL_AND_REPLACE NO NO Heavy Corrections, replacement
+AUDIT YES (duplicates/) YES (timestamp) Good Rarely modified files
+SMART_AUDIT NO YES (hash) EXCELLENT Daily loads, stable data
 
-Insert Mode
+MODE: INSERT
 
-```yaml
-mode: "insert"
-```
+Process:
 
-Behavior: Only insert new records, ignore duplicates
-Use Case: Daily incremental loads, append-only data
+1. Scan inputs/ directory
+2. Check progress (if enabled)
+3. Load CSV/Excel file
+4. Validate data
+5. Detect duplicates (compare row hashes)
+6. Export duplicates to duplicates/to_process/
+7. Insert unique rows
+8. Update progress tracking
 
-Cancel and Replace Mode
+MODE: CANCEL_AND_REPLACE
 
-```yaml
-mode: "cancel_and_replace"
-```
+Process:
 
-Behavior: Delete all records from same source file, then insert new data
-Use Case: Full refreshes, corrected data files
+1. Scan inputs/ directory
+2. Find all rows with same source_filename
+3. DELETE existing rows
+4. Load new data
+5. Validate
+6. Insert all new rows
+7. Optionally delete source file
 
-Audit Mode
+MODE: AUDIT (Classic)
 
-```yaml
-mode: "audit"
-```
+Process:
 
-Behavior: Skip processing if file content unchanged in database
-Use Case: Efficient processing of unchanged files, backup verification
+1. Directory scan
+2. Compare file timestamp with database
+3. If similar timestamp → SKIP file
+4. If different → Process like INSERT
+5. Log skip/process decision
 
----
+MODE: SMART_AUDIT
 
-6. Enhanced Error Recovery Workflows
+Process:
 
-NEW: Failed Rows Recovery Process
-
-When database insertion fails for specific rows, the loader now provides comprehensive recovery:
-
-Step 1: Automatic Detection & Export
-
-· Failed rows automatically detected during insertion
-· Exported to failed_rows/ with ORIGINAL filename and format (Excel/CSV preserved)
-· Error details in _error_message and _failed_reason columns
-· Guidance provided in _GUIDANCE column
-
-Step 2: Manual Correction
-
-1. Open failed rows file in failed_rows/ directory
-2. Review error details in _error_message column
-3. Fix data issues based on failure reason
-4. Automatic metadata removal: Metadata columns automatically removed during reprocessing
-
-Step 3: Reprocessing
-
-1. Save corrected file with original filename
-2. Move to failed_rows/to_process/ directory
-3. Run loader - corrected data will be processed automatically
-4. ✅ ENHANCED: File automatically moved to failed_rows/processed/ after processing
-
-Failure Reason Codes
-
-Code Description
-DUPLICATE_KEY Violates unique constraint
-MISSING_REFERENCE Violates foreign key constraint
-DATA_TYPE_MISMATCH Invalid input syntax
-MISSING_REQUIRED_VALUE Null value in required column
-VALUE_TOO_LONG Value exceeds column length
-DEADLOCK Database deadlock detected
-CONNECTION_ISSUE Database connection problem
-UNKNOWN_ERROR Other database errors
-
-Duplicate Resolution Process
-
-Step 1: Automatic Export
-
-· Duplicates exported to duplicates/ directory with ORIGINAL filename and format
-· Original filename preserved
-· Metadata columns added for resolution guidance
-
-Step 2: Manual Resolution
-
-1. Open duplicate file in duplicates/ directory
-2. Review conflict types using _conflict_type column
-3. Follow guidance in _GUIDANCE column
-4. Resolve conflicts according to business rules
-5. Automatic metadata removal: Metadata columns automatically removed during reprocessing
-
-Step 3: Reprocessing
-
-1. Save cleaned file with original filename
-2. Move to duplicates/to_process/ directory
-3. Run loader - it will automatically detect and process
-4. ✅ ENHANCED: File automatically moved to duplicates/processed/ after processing
-
-Format Conflict Resolution Process
-
-Step 1: Automatic Export
-
-· Conflicting rows exported to format_conflict/ directory with ORIGINAL filename and format
-· Detailed error information in _conflict_details column
-· Guidance provided in _GUIDANCE column
-
-Step 2: Data Correction
-
-1. Identify problematic values using _conflict_details
-2. Correct data types - ensure numeric fields contain numbers, dates are valid, etc.
-3. Automatic metadata removal: Metadata columns automatically removed during reprocessing
-
-Step 3: Reprocessing
-
-1. Save corrected file with original filename
-2. Move to format_conflict/to_process/ directory
-3. Run loader - corrected data will be processed
-4. ✅ ENHANCED: File automatically moved to format_conflict/processed/ after processing
-
----
-
-7. Data Quality & Validation (Enhanced)
-
-Automatic Data Type Validation
-
-The loader validates each column against its expected data type:
-
-Validation Rules
-
-· Numeric Columns: Must contain valid numbers or NULL
-· Date Columns: Must be parsable dates or NULL
-· Boolean Columns: Must be true/false, 1/0, or common boolean representations
-· Text Columns: Any value accepted, but length may be constrained
-
-Enhanced Insertion Error Handling
-
-The loader now provides:
-
-· Chunked processing with configurable chunk sizes
-· Automatic retry on deadlocks and connection issues
-· Row-level error tracking and reporting
-· Configurable failure thresholds
-
-Format Conflict Detection
-
-When data doesn't match expected types, the loader:
-
-1. Identifies conflicting rows
-2. Separates them from clean data
-3. Exports conflicts for manual correction (preserving original file format)
-4. Processes only clean data
-
-Duplicate Detection
-
-Duplicate Types
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────────┐
-│                    Duplicate Detection                                                      │
-└─────────────────────────────────────────────────┬───────────────────────────────────────────┘
-                                                  │
-        What type of duplicate was found?
-                                                  │
-        ┌─────────────────────┬───────────────────┬─────────────────────────────────────────┐
-        │                     │                   │                                         │
-    ┌───▼─────────────┐   ┌───▼─────────────┐   ┌─▼─────────────┐   ┌───▼─────────────┐
-    │ Exact           │   │ Business        │   │ Mixed         │   │ Unknown         │
-    │ Match           │   │ Key             │   │ Both          │   │ Type            │
-    │                 │   │ Conflict        │   │ Types         │   │                 │
-    └───┬─────────────┘   └───┬─────────────┘   └─┬─────────────┘   └───┬─────────────┘
-        │                     │                   │                     │
-    ┌───▼─────────────┐   ┌───▼─────────────┐   ┌─▼─────────────┐   ┌───▼─────────────┐
-    │ EXACT_DUPLICATE  │   │ BUSINESS_KEY_   │   │ EXACT_AND_    │   │ UNKNOWN_CONFLICT│
-    │                 │   │ CONFLICT         │   │ BUSINESS_     │   │                 │
-    │                 │   │                  │   │ CONFLICT      │   │                 │
-    └─────────────────┘   └──────────────────┘   └───────────────┘   └─────────────────┘
-```
-
-Business Key Configuration
-
-Configure business keys in your mapping file:
-
-```csv
-RawColumn,TargetColumn,DataType,LoadFlag,IndexColumn,data_source
-order_id,order_id,INTEGER,Y,Y,file
-customer_id,customer_id,INTEGER,Y,Y,file
-order_date,order_date,DATE,Y,N,file
-amount,amount,NUMERIC,Y,N,file
-```
-
----
-
-8. Advanced Features (Enhanced)
-
-Enhanced Progress Tracking & Resume Capability
-
-The loader uses a hybrid approach:
-
-· File hashes for content changes
-· Timestamps for quick unchanged detection
-· Configuration hashes for rule changes
-· Sheet-level tracking for multi-sheet Excel files
+1. Check file hash vs progress tracking
+2. If file unchanged → SKIP completely
+3. If changed → Load data
+4. Calculate row hashes (SHA256)
+5. Compare with all existing hashes in DB
+6. Keep only NEW rows (hash not in DB)
+7. Silently ignore duplicates (NO export)
+8. Insert new rows, log statistics
 
 Benefits:
 
-· Resume interrupted processing
-· Skip unchanged files efficiently
-· Handle configuration changes intelligently
-· Track individual sheet processing
-
-Automatic Schema Evolution
-
-When new columns are detected:
-
-1. Mapping file is updated automatically with correct positions
-2. Database table is altered (if auto_add_columns: true)
-3. Processing continues with new schema
-
-Enhanced Concurrent Run Prevention
-
-· Lock file prevents multiple instances
-· Configurable timeout for stale locks
-· Automatic cleanup on normal exit
-· Stale lock detection and removal
-
-Chunked Processing & Error Recovery
-
-· Process large files in configurable chunks
-· Automatic retry on database errors
-· Row-level error tracking and export
-· Configurable failure thresholds
-
-Enhanced Logging System
-
-· 📁 Organized Storage: All logs in logs/ directory
-· ⏰ Timestamped Files: processing_YYYYMMDD_HHMMSS.log
-· 🔗 Latest Access: processing_latest.log symlink
-· 📊 Comprehensive Coverage: All processing activities logged
+· Efficient deduplication (row-level)
+· No export overhead
+· Progress tracking prevents reprocessing
+· Silent operation (no user intervention)
 
 ---
 
-9. Troubleshooting Guide (Enhanced)
+6. Enhanced Logging with Colors
 
-Common Issues & Solutions
+Color System
 
-Database Connection Issues
+Log Level Color ANSI Code Purpose
+DEBUG Cyan \033[36m Detailed debugging
+INFO White \033[37m Normal messages
+WARNING Yellow \033[33m Warnings to review
+ERROR Red \033[31m Errors requiring action
+CRITICAL Red background \033[41m\033[37m Critical blocking errors
+
+Visual Examples
+
+```
+[37m2024-01-15 10:30:45 - INFO - Database connection successful[0m
+[33m2024-01-15 10:30:46 - WARNING - Found 5 duplicate rows[0m
+[31m2024-01-15 10:30:47 - ERROR - Database connection lost[0m
+[41m[37m2024-01-15 10:30:48 - CRITICAL - Cannot create table[0m
+```
+
+Log Management
 
 ```bash
-# Test connection manually
+# View colored logs in real-time
+tail -f logs/processing_latest.log
+
+# Search for errors (colored)
+grep --color=always -i "error" logs/processing_latest.log
+
+# Monitor SMART AUDIT statistics
+grep "SMART AUDIT:" logs/processing_latest.log
+
+# Check log files
+ls -la logs/
+```
+
+---
+
+7. Error Recovery
+
+Failed Rows Recovery
+
+Step 1: Automatic Export
+
+· Failed rows exported to failed_rows/
+· Error details in _error_message and _failed_reason
+· Guidance in _GUIDANCE column
+
+Step 2: Manual Correction
+
+1. Open failed file in failed_rows/
+2. Review error details
+3. Fix data issues
+4. Remove metadata columns
+
+Step 3: Reprocessing
+
+1. Save corrected file
+2. Move to failed_rows/to_process/
+3. Run loader → automatic processing
+
+Failure Reason Codes
+
+Code Description Solution
+DUPLICATE_KEY Unique constraint violation Remove duplicates
+MISSING_REFERENCE Foreign key violation Ensure referenced records exist
+DATA_TYPE_MISMATCH Invalid input syntax Fix data types
+MISSING_REQUIRED_VALUE Null in required column Provide values
+VALUE_TOO_LONG Value exceeds column length Shorten values
+DEADLOCK Database deadlock Automatic retry
+CONNECTION_ISSUE Connection problem Check server/network
+UNKNOWN_ERROR Other errors Check detailed message
+
+---
+
+8. Error Reference Table
+
+Common Errors
+
+Category Error Code Solution
+Database Connection refused 08001 Start DB service, check host/port
+Database Password authentication failed 28P01 Verify credentials
+Database Unique violation 23505 Remove duplicates
+Database Foreign key violation 23503 Ensure referenced records exist
+File System Permission denied 13 Check write permissions
+File System No such file or directory 2 Verify file exists
+Excel Sheet not found N/A Check sheet names
+Excel File is not a zip file N/A Verify Excel file integrity
+
+---
+
+9. Troubleshooting
+
+Common Issues
+
+Database Connection:
+
+```bash
+# Test connection
 psql -h localhost -U your_username -d your_database
 
-# Check configuration
+# Check config
 cat global_loader_config.yaml | grep -E "(host|port|dbname|user)"
-
-# Check logs
-tail -f logs/processing_latest.log
 ```
 
-File Processing Issues
+File Permissions:
 
 ```bash
-# Check file permissions
+# Check permissions
 ls -la inputs/sales_data/
+ls -la logs/
 
-# Verify file format
-file inputs/sales_data/sales_20230101.csv
-head -5 inputs/sales_data/sales_20230101.csv
-
-# Check logs for detailed errors
-grep -i "error" logs/processing_latest.log
+# Fix permissions
+chmod 644 inputs/sales_data/*.csv
+chmod 755 inputs/sales_data/
+chmod 755 logs/
 ```
 
-Multi-Sheet Configuration Issues
-
-Problem: Excel file processed but only some sheets loaded
-Solution: Check sheet_names is in correct LIST format in YAML
-
-Problem: "Sheet not found" errors
-Solution: Verify exact sheet names match between file and configuration
-
-Directory Structure Issues
-
-Problem: "Directory not found" errors
+Lock File Issues:
 
 ```bash
-# Solution: Verify directory structure
-ls -la inputs/sales_data/
+# Remove stale lock
+rm -f loader.lock
+
+# Check lock age
+if [ -f loader.lock ]; then
+    lock_age=$(($(date +%s) - $(stat -f %m loader.lock)))
+    if [ $lock_age -gt 3600 ]; then
+        rm loader.lock
+    fi
+fi
 ```
-
-Problem: "Mapping file not found" errors
-
-```bash
-# Solution: Check mapping files are in rules folder
-ls -la rules/*.csv
-```
-
-Problem: Rule validation failures
-
-```yaml
-# Solution: Ensure directory starts with inputs/
-directory: "inputs/sales_data"  # ✅ Correct
-directory: "sales_data"         # ❌ Incorrect
-```
-
-Failed Rows Issues
-
-Problem: Failed rows not being exported
-Solution: Check enable_row_level_recovery: true in global config
-
-Problem: Failed rows reprocessing fails
-Solution: Ensure corrected files are placed in failed_rows/to_process/ - metadata is auto-removed
-
-Empty Sheet Handling
-
-Problem: Excel files processed but no data loaded
-Solution: Check logs for empty sheet warnings
-
-```bash
-grep -i "empty" logs/processing_latest.log
-```
-
-Duplicate Detection Issues
-
-Problem: Unexpected duplicates reported
-Solution: Review hash_exclude_columns in rule configuration
 
 Log Analysis
-
-Key Log Messages
-
-```log
-# Normal processing
-INFO - Loaded 150 rows to sales table
-INFO - Processing sheet 2/3: 'Inventory'
-
-# Warnings (review but not critical)
-WARNING - Sheet 'Marketing' is empty or contains only headers
-WARNING - Exported 5 duplicate rows to duplicates/sales_20230101.csv
-WARNING - Exported 3 failed rows to failed_rows/inventory_20230101.xlsx  # ✅ NEW
-
-# Enhanced file movement
-INFO - Moved duplicates file to processed: duplicates/processed/sales_20230101_20231201143022.csv
-INFO - Moved failed_rows file to processed: failed_rows/processed/inventory_20230101_20231201143022.xlsx
-
-# Errors (require action)
-ERROR - Database connection failed
-ERROR - Sheet 'Sales' not found in file
-ERROR - sheet_names must be a list for processing_method 'multiple'
-ERROR - Directory should be under inputs/ folder: sales_data
-```
-
-Enhanced Log Access
 
 ```bash
 # View latest log
 tail -f logs/processing_latest.log
 
-# Search for errors in all logs
-grep -r "ERROR" logs/
+# Search for errors
+grep -i "error" logs/processing_latest.log
+grep -i "warning" logs/processing_latest.log
+grep -i "smart_audit" logs/processing_latest.log
 
-# Check processing statistics
-grep -E "(Processed|Failed|Duration)" logs/processing_latest.log
-
-# Monitor specific file processing
-grep "sales_20230101" logs/processing_latest.log
-```
-
-Debug Mode
-
-Enable detailed logging by modifying the script:
-
-```python
-logging.basicConfig(
-    level=logging.DEBUG,  # Change from INFO to DEBUG
-    # ... rest of configuration
-)
+# Check SMART AUDIT statistics
+grep -r "SMART AUDIT:" logs/
 ```
 
 ---
 
-10. Best Practices (Enhanced)
+10. Best Practices
 
 File Management
 
-· Use consistent naming conventions
-· Organize files by source system or frequency in inputs/ folder
-· Implement retention policies for processed files
-· Regularly clean to_process directories
-· ✅ ENHANCED: Monitor processed/ directories for archive management
+· Use consistent naming in inputs/
+· Organize by source system/frequency
+· Implement retention policies
+· Regular cleanup of to_process directories
 
-Multi-Sheet Excel Best Practices
+SMART AUDIT Mode
 
-· Use exact sheet names: Case-sensitive matching
-· Validate sheet existence: Check sheets exist before configuring
-· List format: Always use YAML list format for multiple sheets
-· Consistent structure: Ensure all processed sheets have same columns
-· Sheet naming: Use descriptive, consistent sheet names
+· Use for daily incremental loads
+· Monitor duplicate statistics
+· Combine with progress tracking
+· Ideal for high-volume data
 
-Enhanced Organized Structure Best Practices
+Log Management
 
-· Configuration management: Keep all configs in rules/ folder
-· Data organization: Use clear subdirectory names in inputs/
-· Backup strategy: Backup rules/ separately from inputs/
-· Version control: Only commit rules/ folder to version control
-· 📁 NEW: Log management: Regular log review and archiving
-
-Failed Rows Recovery Best Practices
-
-· Monitor failed_rows/ directory regularly
-· Review failure patterns to identify systemic data quality issues
-· Train team members on interpreting error messages
-· Establish SLAs for failed rows resolution
-· ✅ ENHANCED: Use the automatic file movement to track resolution progress
-
-Data Quality
-
-· Validate source data before loading into inputs/ folders
-· Establish clear business rules for duplicate resolution
-· Document data type expectations for each column
-· Monitor format conflict patterns for systemic issues
-
-Performance Optimization
-
-· Use appropriate batch_size for your data volume
-· Configure hash_exclude_columns for large text/binary columns
-· Set search_subdirectories: false for flat directory structures
-· Monitor database performance during large loads
-· Adjust chunk_size based on database performance
+· Monitor logs/ directory size
+· Implement log rotation
+· Use processing_latest.log symlink
+· Leverage color-coded logs for monitoring
 
 Security
 
-· Secure database credentials in configuration files in rules/ folder
-· Restrict file permissions on sensitive data directories in inputs/
-· Regularly review processing logs for anomalies
-· Implement access controls for source directories
-· 📁 NEW: Secure log files containing processing details
+· Secure database credentials in rules/
+· Restrict file permissions on inputs/
+· Regular log review for anomalies
+· Access controls for source directories
 
 ---
 
-11. Example Workflows (Enhanced)
+11. Command Reference
 
-Daily Sales Data Load
-
-```
-1. Source: sales_YYYYMMDD.csv in inputs/sales_data/ directory
-2. Processing: Insert mode, automatic duplicate detection
-3. Error Handling: Failed rows automatically exported to failed_rows/ with original format
-4. Output: Data loaded to sales table
-5. Monitoring: Check logs/processing_latest.log for warnings/errors
-6. ✅ ENHANCED: Logs stored with timestamp in logs/ directory
-```
-
-Monthly Multi-Sheet Report
-
-```
-1. Source: monthly_report_YYYYMM.xlsx with multiple sheets in inputs/inventory_data/
-2. Configuration: Process specific sheets using LIST format in rules/inventory_rule.yaml
-3. Processing: Each sheet loaded to inventory table
-4. Error Handling: Sheet-level failed row tracking with Excel format preservation
-5. Tracking: Source filename includes sheet name for audit
-6. ✅ ENHANCED: Files moved to processed/ after successful processing
-```
-
-Data Correction Workflow
-
-```
-1. Issue: Format conflicts detected in weekly report
-2. Export: Conflicting rows saved to format_conflict/ directory with original Excel format
-3. Correction: Fix data type issues in exported file
-4. Reprocessing: Move corrected file to format_conflict/to_process/
-5. Verification: Check database for corrected data
-6. ✅ ENHANCED: File automatically moved to format_conflict/processed/ after processing
-```
-
-NEW: Failed Rows Recovery Workflow
-
-```
-1. Detection: Database insertion fails for specific rows
-2. Automatic Export: Failed rows saved to failed_rows/ with error details (original format preserved)
-3. Analysis: Review _error_message and _failed_reason columns in logs
-4. Correction: Fix data issues based on failure reason
-5. Reprocessing: Move corrected file to failed_rows/to_process/ (metadata auto-removed)
-6. Verification: Check processing_latest.log for successful insertion
-7. ✅ ENHANCED: File automatically moved to failed_rows/processed/ after processing
-```
-
-Multi-Sheet Validation Workflow
-
-```
-1. Check sheets: python -c "import pandas as pd; print(pd.ExcelFile('inputs/file.xlsx').sheet_names)"
-2. Configure: Use exact sheet names in YAML list format in rules/ folder
-3. Test: Run loader with small test file
-4. Monitor: Check logs/processing_latest.log for each sheet processing status
-5. Error Handling: Review failed_rows/ for sheet-specific issues with format preservation
-```
-
-Enhanced Log Monitoring Workflow
-
-```
-1. Real-time Monitoring: tail -f logs/processing_latest.log
-2. Error Tracking: grep "ERROR" logs/processing_*.log
-3. Performance Analysis: grep -E "(Processed|Duration)" logs/processing_latest.log
-4. Archive Management: Rotate old log files from logs/ directory
-5. Audit Trail: Use timestamped log files for compliance reporting
-```
-
----
-
-12. Monitoring & Maintenance (Enhanced)
-
-Regular Checks
-
-· Review logs: Monitor logs/processing_latest.log daily
-· Monitor database storage growth
-· Verify data quality in target tables
-· Check for stale files in to_process directories
-· ✅ NEW: Monitor failed_rows/ directory for unresolved issues
-· ✅ ENHANCED: Check processed/ directories for successful completions
-
-Multi-Sheet Specific Checks
-
-· Verify all configured sheets are being processed
-· Check for sheet name changes in source files
-· Monitor empty sheet warnings for data issues
-· Validate sheet count matches expectations
-
-Enhanced Organized Structure Maintenance
-
-· Regularly verify directory structure integrity
-· Backup rules/ folder configuration separately
-· Archive old data from inputs/ folders as needed
-· Clean up temporary processing directories
-· ✅ NEW: Monitor and resolve failed rows backlog
-· 📁 NEW: Manage log files in logs/ directory
-
-Maintenance Tasks
+Basic Usage
 
 ```bash
-# Clean old progress tracking data (keep last 30 days)
-find . -name "processing_progress.json" -mtime +30 -exec rm {} \;
+# Standard processing
+python loader_script.py
 
-# Archive processed files (keep last 90 days)
-find duplicates/processed/ -name "*.csv" -mtime +90 -exec rm {} \;
-find format_conflict/processed/ -name "*.xlsx" -mtime +90 -exec rm {} \;
-find failed_rows/processed/ -name "*.csv" -mtime +90 -exec rm {} \;
+# Test connection
+python loader_script.py --test-connection
 
-# Check for stale lock files
-find . -name "loader.lock" -mtime +1 -exec rm {} \;
+# Delete files after processing
+python loader_script.py --delete-files Y
 
-# Validate YAML syntax for all rule files
-python -c "import yaml; [yaml.safe_load(open(f)) for f in ['rules/*.yaml']]"
+# Setup sample configuration
+python loader_script.py --setup
+```
 
-# Check for old failed rows (older than 7 days)
-find failed_rows/ -name "*.csv" -mtime +7 -exec ls -la {} \;
+Utility Commands
 
-# 📁 NEW: Archive old log files (keep last 30 days)
-find logs/ -name "processing_*.log" -mtime +30 -exec gzip {} \;
-find logs/ -name "processing_*.log.gz" -mtime +90 -exec rm {} \;
+```bash
+# Check structure
+find . -type d -name "inputs" -o -name "rules" -o -name "duplicates" -o -name "format_conflict" -o -name "failed_rows" -o -name "logs" | sort
 
-# 📁 NEW: Check log directory size
-du -sh logs/
+# View logs
+tail -n 50 logs/processing_latest.log
+
+# Check lock files
+find . -name "loader.lock" -mtime +1 -exec ls -la {} \;
+
+# Archive processed files
+tar -czf processed_$(date +%Y%m%d).tar.gz duplicates/processed/ format_conflict/processed/ failed_rows/processed/
+
+# Monitor real-time
+tail -f logs/processing_latest.log | grep --color=always -E "(ERROR|WARNING|CRITICAL)"
 ```
 
 Verification Script
@@ -1018,11 +522,10 @@ verify_structure.sh
 #!/bin/bash
 echo "Verifying enhanced PostgreSQL Data Loader structure..."
 
-# Check required directories
 required_dirs=(
     "rules"
     "inputs/sales_data"
-    "inputs/inventory_data" 
+    "inputs/inventory_data"
     "inputs/weekly_reports"
     "duplicates/to_process"
     "duplicates/processed"
@@ -1030,7 +533,7 @@ required_dirs=(
     "format_conflict/processed"
     "failed_rows/to_process"
     "failed_rows/processed"
-    "logs"  # 📁 NEW: Log directory
+    "logs"
 )
 
 for dir in "${required_dirs[@]}"; do
@@ -1041,140 +544,59 @@ for dir in "${required_dirs[@]}"; do
     fi
 done
 
-# Check for latest log symlink
-if [ -L "logs/processing_latest.log" ]; then
-    echo "✅ Latest log symlink exists"
-else
-    echo "❌ Latest log symlink missing"
-fi
-
 echo ""
-echo "Enhanced structure verification completed!"
-```
-
-Log Management Script
-
-manage_logs.sh
-
-```bash
-#!/bin/bash
-echo "Managing PostgreSQL Data Loader logs..."
-
-# Compress logs older than 30 days
-echo "Compressing logs older than 30 days..."
-find logs/ -name "processing_*.log" -mtime +30 -exec gzip {} \;
-
-# Delete compressed logs older than 90 days
-echo "Deleting compressed logs older than 90 days..."
-find logs/ -name "processing_*.log.gz" -mtime +90 -exec rm {} \;
-
-# Show current log status
-echo ""
-echo "Current log status:"
-ls -la logs/processing_latest.log
-echo "Recent log files:"
-ls -lt logs/processing_*.log | head -5
-echo "Disk usage:"
-du -sh logs/
-
-echo "Log management completed!"
+echo "Structure verification completed!"
 ```
 
 ---
 
 Support & Resources
 
-Getting Help
+Getting Help:
 
-1. Check logs: tail -f logs/processing_latest.log
-2. Verify configuration: Validate YAML syntax and LIST formats in rules/ folder
-3. Test connectivity: Use --test-connection option
-4. Review examples: Refer to sample configurations in rules/ folder
-5. ✅ NEW: Check failed_rows/ for detailed error information with original file formats
-6. 📁 NEW: Examine timestamped logs in logs/ directory for historical analysis
+1. Check Logs: tail -f logs/processing_latest.log
+2. Verify Configuration: Validate YAML in rules/
+3. Test Connectivity: Use --test-connection option
+4. Review Examples: Sample configs in rules/
+5. Check Error Reference: Comprehensive table above
+6. Examine Failed Rows: Files in failed_rows/
+7. SMART AUDIT Statistics: Search for "SMART AUDIT:" in logs
 
-Multi-Sheet Troubleshooting
+---
 
-```python
-# Quick sheet name check
-import pandas as pd
-file_path = "inputs/your_file.xlsx"
-sheet_names = pd.ExcelFile(file_path).sheet_names
-print("Available sheets:", sheet_names)
+Documentation Version: 2.0 | Last Updated: January 2024
 
-# Verify YAML list format
-import yaml
-with open('rules/your_rule.yaml') as f:
-    config = yaml.safe_load(f)
-    print("Sheet names type:", type(config['sheet_config']['sheet_names']))
-    print("Sheet names:", config['sheet_config']['sheet_names'])
 ```
 
-Failed Rows Analysis
+**Instructions pour PyCharm :**
 
-```python
-# Analyze failed rows patterns
-import pandas as pd
-failed_file = "failed_rows/your_file.csv"
-if os.path.exists(failed_file):
-    df = pd.read_csv(failed_file)
-    print("Failure reasons:", df['_failed_reason'].value_counts())
-    print("Error messages sample:", df['_error_message'].head(3))
+1. **Créer le fichier :**
+   - Dans PyCharm → `File` → `New` → `File`
+   - Nommer : `PostgreSQL_Data_Loader_User_Guide.md`
+
+2. **Coller le contenu :**
+   - Copier tout le texte Markdown ci-dessus
+   - Coller dans le nouveau fichier
+
+3. **Activer la prévisualisation :**
+   - Clique droit sur le fichier → `Open in` → `Preview`
+   - Ou utiliser l'onglet `Preview` en haut à droite
+
+4. **Navigation par liens :**
+   - Les liens internes (comme `#installation-setup`) fonctionnent en mode prévisualisation
+   - Ctrl+click sur un lien pour naviguer
+
+5. **Formatage automatique :**
+   - PyCharm formate automatiquement le Markdown
+   - Les tableaux et blocs de code sont bien rendus
+
+**Avantages du format .md :**
+- ✅ Support natif dans PyCharm
+- ✅ Prévisualisation intégrée
+- ✅ Navigation par liens internes
+- ✅ Formatage automatique
+- ✅ Compatible avec Git
+- ✅ Léger et rapide à charger
+
+**Alternative :** Si tu préfères un format plus riche, tu peux aussi sauvegarder en `.html` ou `.pdf`, mais `.md` est le plus pratique pour l'édition et la navigation dans PyCharm.
 ```
-
-Enhanced Log Analysis
-
-```bash
-# Quick log analysis
-echo "=== Recent Errors ==="
-grep "ERROR" logs/processing_latest.log | tail -10
-
-echo "=== Processing Summary ==="
-grep -E "(Processed|Failed)" logs/processing_latest.log | tail -5
-
-echo "=== Performance Metrics ==="
-grep "Duration" logs/processing_latest.log | tail -3
-
-echo "=== File Processing Status ==="
-grep -E "(Processing|Loaded|Exported)" logs/processing_latest.log | tail -10
-```
-
-Common Patterns
-
-· File pattern extraction: Use --extract-pattern option
-· Rule validation: Check rule files with YAML validators
-· Database testing: Test queries with psql or pgAdmin
-· Sheet validation: Always verify sheet names exist in files
-· Directory structure: Use the organized rules/ and inputs/ structure
-· ✅ NEW: Failed rows resolution: Consistent workflow across all error types
-· 📁 NEW: Log management: Use timestamped files for audit and debugging
-
-Command Reference
-
-```bash
-# Basic usage
-python loader_script.py
-
-# Test database connection
-python loader_script.py --test-connection
-
-# Extract file pattern
-python loader_script.py --extract-pattern "sales_20230101.csv"
-
-# Run with file deletion
-python loader_script.py --delete-files Y
-
-# Create sample data
-python create_sample_data.py
-
-# 📁 NEW: Monitor logs in real-time
-tail -f logs/processing_latest.log
-
-# 📁 NEW: Check recent processing status
-grep -E "(STARTING|Processed|Failed)" logs/processing_latest.log
-
-# 📁 NEW: Search for specific file processing
-grep "sales_20230101" logs/processing_*.log
-```
-
-This comprehensive user guide provides complete documentation for the enhanced PostgreSQL Data Loader with failed rows recovery, organized directory structure, timestamped logging, and comprehensive error handling capabilities.
