@@ -1,0 +1,1954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PostgreSQL Data Loader - Complete User Guide</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+        }
+        
+        h2 {
+            color: #2980b9;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+        
+        h3 {
+            color: #34495e;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+        
+        h4 {
+            color: #2c3e50;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        
+        .toc {
+            background-color: #f8f9fa;
+            border-left: 4px solid #3498db;
+            padding: 25px;
+            margin: 25px 0;
+            border-radius: 5px;
+        }
+        
+        .toc ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        
+        .toc li {
+            margin: 8px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .toc li:before {
+            content: "•";
+            color: #3498db;
+            position: absolute;
+            left: 0;
+        }
+        
+        .toc a {
+            color: #2980b9;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        
+        .toc a:hover {
+            color: #1a5276;
+            text-decoration: underline;
+        }
+        
+        .parameter-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            box-shadow: 0 0 10px rgba(0,0,0,0.05);
+            font-size: 14px;
+        }
+        
+        .parameter-table thead tr {
+            background-color: #3498db;
+            color: white;
+            text-align: left;
+        }
+        
+        .parameter-table th,
+        .parameter-table td {
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            vertical-align: top;
+        }
+        
+        .parameter-table tbody tr {
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .parameter-table tbody tr:nth-of-type(even) {
+            background-color: #f8f9fa;
+        }
+        
+        .parameter-table tbody tr:hover {
+            background-color: #e8f4fc;
+        }
+        
+        .code-block {
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            overflow-x: auto;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+        
+        .yaml-block {
+            background-color: #1a1a1a;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            overflow-x: auto;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+        
+        .bash-block {
+            background-color: #333;
+            color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        
+        .mode-comparison {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 25px 0;
+        }
+        
+        .mode-card {
+            background-color: white;
+            border: 1px solid #e1e8ed;
+            border-radius: 8px;
+            padding: 25px;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.08);
+        }
+        
+        .mode-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+        
+        .mode-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            color: white;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        
+        .mode-insert .mode-icon { background-color: #27ae60; }
+        .mode-cancel .mode-icon { background-color: #e74c3c; }
+        .mode-audit .mode-icon { background-color: #f39c12; }
+        .mode-smart .mode-icon { background-color: #8e44ad; }
+        
+        .mode-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .mode-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin: 5px 5px 5px 0;
+        }
+        
+        .badge-green { background-color: #d5f4e6; color: #27ae60; }
+        .badge-red { background-color: #fadbd8; color: #e74c3c; }
+        .badge-yellow { background-color: #fef9e7; color: #f39c12; }
+        .badge-blue { background-color: #ebf5fb; color: #3498db; }
+        .badge-purple { background-color: #f4ecf7; color: #8e44ad; }
+        
+        .step-list {
+            list-style-type: none;
+            padding-left: 0;
+            margin: 15px 0;
+            counter-reset: step-counter;
+        }
+        
+        .step-list li {
+            counter-increment: step-counter;
+            margin-bottom: 10px;
+            padding-left: 35px;
+            position: relative;
+        }
+        
+        .step-list li:before {
+            content: counter(step-counter);
+            background-color: #3498db;
+            color: white;
+            border-radius: 50%;
+            width: 25px;
+            height: 25px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            position: absolute;
+            left: 0;
+            top: 0;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .color-box {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            margin-right: 10px;
+            vertical-align: middle;
+            border: 1px solid #ddd;
+        }
+        
+        .example-box {
+            background-color: #f8f9fa;
+            border-left: 4px solid #3498db;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .example-title {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        .example-log {
+            background-color: #333;
+            color: #fff;
+            padding: 15px;
+            border-radius: 3px;
+            font-family: 'Consolas', monospace;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        
+        .log-info { color: #fff; }
+        .log-warning { color: #ffcc00; }
+        .log-error { color: #ff3333; }
+        .log-critical { background-color: #990000; color: white; padding: 2px 4px; }
+        .log-smart { color: #8e44ad; }
+        
+        .note {
+            background-color: #fffde7;
+            border-left: 4px solid #ffd600;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .warning {
+            background-color: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .important {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 5px 5px 0;
+        }
+        
+        .directory-tree {
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: 'Consolas', monospace;
+            line-height: 1.6;
+            white-space: pre;
+            overflow-x: auto;
+        }
+        
+        .tree-item {
+            margin-left: 20px;
+        }
+        
+        .tree-icon {
+            color: #3498db;
+        }
+        
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ecf0f1;
+            color: #7f8c8d;
+            font-size: 14px;
+            text-align: center;
+        }
+        
+        .section-anchor {
+            display: block;
+            position: relative;
+            top: -80px;
+            visibility: hidden;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .parameter-table {
+                font-size: 12px;
+            }
+            
+            .parameter-table th,
+            .parameter-table td {
+                padding: 8px 10px;
+            }
+            
+            .mode-comparison {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PostgreSQL Data Loader - Complete User Guide</h1>
+        <p style="color: #7f8c8d; margin-bottom: 30px;">Enhanced with Failed Rows Recovery, SMART AUDIT Mode & Comprehensive Error Reference</p>
+        
+        <div class="toc">
+            <h3>📋 Quick Navigation</h3>
+            <ul>
+                <li><a href="#installation">1. Installation & Setup</a></li>
+                <li><a href="#directory">2. Directory Structure</a></li>
+                <li><a href="#configuration">3. Configuration</a></li>
+                <li><a href="#excel">4. Multi-Sheet Excel Configuration</a></li>
+                <li><a href="#modes">5. Processing Modes</a></li>
+                <li><a href="#logging">6. Enhanced Logging with Colors</a></li>
+                <li><a href="#error-recovery">7. Error Recovery</a></li>
+                <li><a href="#error-reference">8. Error Reference Table</a></li>
+                <li><a href="#troubleshooting">9. Troubleshooting</a></li>
+                <li><a href="#best-practices">10. Best Practices</a></li>
+                <li><a href="#commands">11. Command Reference</a></li>
+            </ul>
+        </div>
+
+        <!-- Installation & Setup -->
+        <span class="section-anchor" id="installation"></span>
+        <h2>1. Installation & Setup</h2>
+        
+        <h3>Quick Installation</h3>
+        <div class="bash-block">pip install pandas psycopg2-binary pyyaml numpy openpyxl
+
+# Create organized directory structure
+mkdir -p rules inputs/sales_data inputs/inventory_data inputs/weekly_reports
+mkdir -p duplicates/to_process duplicates/processed
+mkdir -p format_conflict/to_process format_conflict/processed
+mkdir -p failed_rows/to_process failed_rows/processed
+mkdir -p logs
+
+# Generate sample configuration
+python loader_script.py</div>
+        
+        <h3>Setup Script (setup_directories.sh)</h3>
+        <div class="bash-block">#!/bin/bash
+echo "Creating enhanced PostgreSQL Data Loader directory structure..."
+
+# Configuration directories
+mkdir -p rules
+
+# Input data directories
+mkdir -p inputs/sales_data
+mkdir -p inputs/inventory_data
+mkdir -p inputs/weekly_reports
+mkdir -p inputs/regional_reports
+mkdir -p inputs/customer_data
+
+# Processing directories
+mkdir -p duplicates/to_process
+mkdir -p duplicates/processed
+mkdir -p format_conflict/to_process
+mkdir -p format_conflict/processed
+mkdir -p failed_rows/to_process
+mkdir -p failed_rows/processed
+
+# Log directory
+mkdir -p logs
+
+echo "Enhanced directory structure created successfully!"
+echo "Logs will be stored in: logs/"</div>
+
+        <!-- Directory Structure -->
+        <span class="section-anchor" id="directory"></span>
+        <h2>2. Directory Structure</h2>
+        
+        <div class="directory-tree">data_loader/
+├── loader_script.py              # Main loader script
+├── global_loader_config.yaml     # Global configuration
+├── processing_progress.json      # Progress tracking
+├── loader.lock                   # Lock file (auto-generated)
+├── rules/                        # All configuration files
+│   ├── sales_rule.yaml
+│   ├── inventory_rule.yaml
+│   ├── weekly_rule.yaml
+│   ├── sales_mapping.csv
+│   ├── inventory_mapping.csv
+│   └── weekly_mapping.csv
+├── inputs/                       # All input data directories
+│   ├── sales_data/
+│   │   ├── sales_20230101.csv
+│   │   ├── sales_20230102.csv
+│   │   └── archive/
+│   ├── inventory_data/
+│   │   ├── inventory_20230101.xlsx
+│   │   └── inventory_20230102.xlsx
+│   └── weekly_reports/
+│       ├── weekly_20230101.xlsx
+│       └── weekly_20230108.xlsx
+├── duplicates/                   # Auto-generated directories
+│   ├── to_process/
+│   └── processed/
+├── format_conflict/              # Auto-generated directories
+│   ├── to_process/
+│   └── processed/
+├── failed_rows/                  # Failed rows recovery
+│   ├── to_process/
+│   └── processed/
+└── logs/                         # Enhanced logging directory
+    ├── processing_20231201_143022.log
+    ├── processing_20231201_150045.log
+    └── processing_latest.log -> processing_20231201_150045.log</div>
+
+        <!-- Configuration -->
+        <span class="section-anchor" id="configuration"></span>
+        <h2>3. Configuration</h2>
+        
+        <h3>Global Configuration (global_loader_config.yaml)</h3>
+        <div class="yaml-block"># Database Connection
+dbname: "your_database_name"
+user: "your_username"
+password: "your_password"
+host: "localhost"
+port: 5432
+
+# Processing Settings
+batch_size: 1000
+max_connections: 5
+min_connections: 1
+retry_attempts: 3
+
+# Features
+enable_progress_tracking: true
+enable_data_validation: true
+auto_add_columns: true
+timestamp_tolerance_seconds: 1.0
+
+# File Handling
+delete_files: "N"
+lock_timeout: 3600
+
+# Empty Sheet Handling
+skip_empty_sheets: true
+warn_on_empty_sheets: true
+treat_empty_as_error: false
+
+# Enhanced Error Recovery Settings
+enable_row_level_recovery: true
+fail_on_partial_insert: false
+retry_on_deadlock: true
+max_retry_delay: 30
+enable_batch_validation: true
+chunk_size: 100
+max_chunk_failures: 5
+
+# Sample File Control
+generate_sample_files: false
+
+# Global Hash Exclusions
+global_hash_exclude_columns: []</div>
+        
+        <h3>Global Configuration Parameters</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Type</th>
+                    <th>Default</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>dbname</strong></td>
+                    <td>PostgreSQL database name</td>
+                    <td>String</td>
+                    <td>"your_database_name"</td>
+                </tr>
+                <tr>
+                    <td><strong>user</strong></td>
+                    <td>PostgreSQL username</td>
+                    <td>String</td>
+                    <td>"your_username"</td>
+                </tr>
+                <tr>
+                    <td><strong>password</strong></td>
+                    <td>PostgreSQL password</td>
+                    <td>String</td>
+                    <td>"your_password"</td>
+                </tr>
+                <tr>
+                    <td><strong>host</strong></td>
+                    <td>PostgreSQL server hostname</td>
+                    <td>String</td>
+                    <td>"localhost"</td>
+                </tr>
+                <tr>
+                    <td><strong>port</strong></td>
+                    <td>PostgreSQL server port</td>
+                    <td>Integer</td>
+                    <td>5432</td>
+                </tr>
+                <tr>
+                    <td><strong>batch_size</strong></td>
+                    <td>Number of rows processed in one batch</td>
+                    <td>Integer</td>
+                    <td>1000</td>
+                </tr>
+                <tr>
+                    <td><strong>max_connections</strong></td>
+                    <td>Maximum connections in connection pool</td>
+                    <td>Integer</td>
+                    <td>5</td>
+                </tr>
+                <tr>
+                    <td><strong>min_connections</strong></td>
+                    <td>Minimum connections in connection pool</td>
+                    <td>Integer</td>
+                    <td>1</td>
+                </tr>
+                <tr>
+                    <td><strong>retry_attempts</strong></td>
+                    <td>Number of retry attempts for failed operations</td>
+                    <td>Integer</td>
+                    <td>3</td>
+                </tr>
+                <tr>
+                    <td><strong>enable_progress_tracking</strong></td>
+                    <td>Track processed files to avoid reprocessing</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>enable_data_validation</strong></td>
+                    <td>Validate data types and constraints before insertion</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>auto_add_columns</strong></td>
+                    <td>Automatically add new columns detected in source files</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>timestamp_tolerance_seconds</strong></td>
+                    <td>Time window to consider files as already processed</td>
+                    <td>Float</td>
+                    <td>1.0</td>
+                </tr>
+                <tr>
+                    <td><strong>delete_files</strong></td>
+                    <td>Delete source files after successful processing ("Y"/"N")</td>
+                    <td>String</td>
+                    <td>"N"</td>
+                </tr>
+                <tr>
+                    <td><strong>lock_timeout</strong></td>
+                    <td>Lock timeout in seconds to prevent concurrent runs</td>
+                    <td>Integer</td>
+                    <td>3600</td>
+                </tr>
+                <tr>
+                    <td><strong>skip_empty_sheets</strong></td>
+                    <td>Skip empty Excel sheets during processing</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>warn_on_empty_sheets</strong></td>
+                    <td>Generate warning for empty Excel sheets</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>treat_empty_as_error</strong></td>
+                    <td>Treat empty sheets as processing errors</td>
+                    <td>Boolean</td>
+                    <td>false</td>
+                </tr>
+                <tr>
+                    <td><strong>enable_row_level_recovery</strong></td>
+                    <td>Enable row-by-row recovery for failed inserts</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>fail_on_partial_insert</strong></td>
+                    <td>Fail entire batch if some rows cannot be inserted</td>
+                    <td>Boolean</td>
+                    <td>false</td>
+                </tr>
+                <tr>
+                    <td><strong>retry_on_deadlock</strong></td>
+                    <td>Automatically retry on database deadlocks</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>max_retry_delay</strong></td>
+                    <td>Maximum delay between retry attempts (seconds)</td>
+                    <td>Integer</td>
+                    <td>30</td>
+                </tr>
+                <tr>
+                    <td><strong>enable_batch_validation</strong></td>
+                    <td>Validate data in batches before insertion</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>chunk_size</strong></td>
+                    <td>Number of rows per chunk for batch processing</td>
+                    <td>Integer</td>
+                    <td>100</td>
+                </tr>
+                <tr>
+                    <td><strong>max_chunk_failures</strong></td>
+                    <td>Maximum number of chunk failures before stopping</td>
+                    <td>Integer</td>
+                    <td>5</td>
+                </tr>
+                <tr>
+                    <td><strong>generate_sample_files</strong></td>
+                    <td>Generate sample configuration and data files</td>
+                    <td>Boolean</td>
+                    <td>false</td>
+                </tr>
+                <tr>
+                    <td><strong>global_hash_exclude_columns</strong></td>
+                    <td>Columns excluded from hash calculation</td>
+                    <td>List</td>
+                    <td>[]</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Processing Rules (rules/sales_rule.yaml)</h3>
+        <div class="yaml-block">base_name: "sales"
+directory: "inputs/sales_data"
+file_pattern: "sales_\\d{8}\\.csv"
+date_format: "%Y%m%d"
+start_row: 0
+start_col: 0
+mode: "insert"
+date_from_filename_col_name: "file_date"
+hash_exclude_columns: []
+search_subdirectories: true
+skip_subdirectories: []  # Directories to skip entirely
+skip_file_patterns: []   # File patterns to skip
+mapping_file: "rules/sales_mapping.csv"</div>
+        
+        <h3>Multi-Sheet Excel Rule (rules/inventory_rule.yaml)</h3>
+        <div class="yaml-block">base_name: "inventory"
+directory: "inputs/inventory_data"
+file_pattern: "inventory_\\d{8}\\.xlsx"
+date_format: "%Y%m%d"
+start_row: 0
+start_col: 0
+mode: "insert"
+date_from_filename_col_name: "file_date"
+hash_exclude_columns: []
+search_subdirectories: true
+skip_subdirectories: ["processed", "rejected"]
+skip_file_patterns: [".*2022.*", ".*2023.*", ".*draft.*"]
+sheet_config:
+  processing_method: "multiple"
+  sheet_names: 
+    - "Sheet1"
+    - "Sheet2"
+mapping_file: "rules/inventory_mapping.csv"</div>
+        
+        <h3>Processing Rule Parameters</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Type</th>
+                    <th>Example</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>base_name</strong></td>
+                    <td>Base name for target database table</td>
+                    <td>String</td>
+                    <td>"sales"</td>
+                </tr>
+                <tr>
+                    <td><strong>directory</strong></td>
+                    <td>Source directory for input files</td>
+                    <td>String</td>
+                    <td>"inputs/sales_data"</td>
+                </tr>
+                <tr>
+                    <td><strong>file_pattern</strong></td>
+                    <td>Regex pattern to match filenames</td>
+                    <td>String</td>
+                    <td>"sales_\d{8}\.csv"</td>
+                </tr>
+                <tr>
+                    <td><strong>date_format</strong></td>
+                    <td>Date format used in filenames</td>
+                    <td>String</td>
+                    <td>"%Y%m%d"</td>
+                </tr>
+                <tr>
+                    <td><strong>start_row</strong></td>
+                    <td>Starting row for data (0-based index)</td>
+                    <td>Integer</td>
+                    <td>0</td>
+                </tr>
+                <tr>
+                    <td><strong>start_col</strong></td>
+                    <td>Starting column for data (0-based index)</td>
+                    <td>Integer</td>
+                    <td>0</td>
+                </tr>
+                <tr>
+                    <td><strong>mode</strong></td>
+                    <td>Processing mode</td>
+                    <td>String</td>
+                    <td>"insert"</td>
+                </tr>
+                <tr>
+                    <td><strong>date_from_filename_col_name</strong></td>
+                    <td>Column name to store extracted date</td>
+                    <td>String</td>
+                    <td>"file_date"</td>
+                </tr>
+                <tr>
+                    <td><strong>hash_exclude_columns</strong></td>
+                    <td>Columns to exclude from duplicate detection hashes</td>
+                    <td>List</td>
+                    <td>[]</td>
+                </tr>
+                <tr>
+                    <td><strong>search_subdirectories</strong></td>
+                    <td>Search recursively in subdirectories</td>
+                    <td>Boolean</td>
+                    <td>true</td>
+                </tr>
+                <tr>
+                    <td><strong>skip_subdirectories</strong></td>
+                    <td>List of subdirectory names to skip entirely</td>
+                    <td>List</td>
+                    <td>["archive", "temp"]</td>
+                </tr>
+                <tr>
+                    <td><strong>skip_file_patterns</strong></td>
+                    <td>List of regex patterns for files to skip</td>
+                    <td>List</td>
+                    <td>[".*test.*"]</td>
+                </tr>
+                <tr>
+                    <td><strong>mapping_file</strong></td>
+                    <td>Path to CSV mapping file</td>
+                    <td>String</td>
+                    <td>"rules/sales_mapping.csv"</td>
+                </tr>
+                <tr>
+                    <td><strong>sheet_config</strong></td>
+                    <td>Excel sheet configuration</td>
+                    <td>Object</td>
+                    <td>See Multi-Sheet Excel section</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Mapping Files Example (rules/sales_mapping.csv)</h3>
+        <div class="code-block">RawColumn,TargetColumn,DataType,LoadFlag,IndexColumn,data_source,definition,order
+OrderID,orderid,INTEGER,Y,Y,file,,0
+Customer,customer,TEXT,Y,N,file,,1
+Amount,amount,NUMERIC,Y,N,file,,2
+loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,,3
+source_filename,source_filename,TEXT,Y,N,system,,4
+content_hash,content_hash,TEXT,Y,N,system,,5
+operation,operation,TEXT,Y,N,system,,6</div>
+
+        <!-- Multi-Sheet Excel Configuration -->
+        <span class="section-anchor" id="excel"></span>
+        <h2>4. Multi-Sheet Excel Configuration</h2>
+        
+        <h3>Configuration Methods</h3>
+        
+        <h4>Single Sheet Processing</h4>
+        <div class="yaml-block">sheet_config:
+  processing_method: "specific"
+  specific_sheet: "Monthly Data"  # Process only this sheet</div>
+        
+        <h4>Multiple Named Sheets</h4>
+        <div class="yaml-block">sheet_config:
+  processing_method: "multiple"
+  sheet_names: 
+    - "Sales"
+    - "Inventory" 
+    - "Expenses"   # CORRECT: List format with dashes</div>
+        
+        <h4>All Sheets</h4>
+        <div class="yaml-block">sheet_config:
+  processing_method: "all"  # Process every sheet in the file</div>
+        
+        <h4>Pattern-Based Sheet Selection</h4>
+        <div class="yaml-block">sheet_config:
+  processing_method: "pattern"
+  sheet_name_pattern: "Region_.*"  # Process sheets like "Region_North", "Region_South"</div>
+        
+        <div class="note">
+            <strong>✅ CORRECT YAML List Formats:</strong><br>
+            <code>sheet_names: ["Sheet1", "Sheet2", "Sheet3"]</code> (inline list)<br>
+            <code>sheet_names: \n  - "Sheet1"\n  - "Sheet2"\n  - "Sheet3"</code> (multi-line list)
+        </div>
+        
+        <div class="warning">
+            <strong>❌ INCORRECT YAML Formats:</strong><br>
+            <code>sheet_names: "Sheet1, Sheet2, Sheet3"</code> (not a list)<br>
+            <code>sheet_names: "Sheet1", "Sheet2", "Sheet3"</code> (comma-separated string)
+        </div>
+        
+        <h3>Sheet Validation Script</h3>
+        <div class="code-block"># Quick sheet name verification
+import pandas as pd
+
+def verify_excel_sheets(file_path):
+    try:
+        xl_file = pd.ExcelFile(file_path)
+        sheet_names = xl_file.sheet_names
+        print(f"Available sheets in {file_path}:")
+        for i, sheet in enumerate(sheet_names, 1):
+            print(f"  {i}. {sheet}")
+        return sheet_names
+    except Exception as e:
+        print(f"Error reading Excel file: {e}")
+        return []
+
+# Usage
+verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
+
+        <!-- Processing Modes -->
+        <span class="section-anchor" id="modes"></span>
+        <h2>5. Processing Modes</h2>
+        
+        <div class="mode-comparison">
+            <div class="mode-card mode-insert">
+                <div class="mode-header">
+                    <div class="mode-icon">I</div>
+                    <div class="mode-title">INSERT Mode</div>
+                </div>
+                <p><span class="mode-badge badge-green">Duplicates: EXPORTED</span></p>
+                <p><span class="mode-badge badge-yellow">Performance: STANDARD</span></p>
+                <p><strong>Use Case:</strong> Initial load, new data</p>
+                
+                <h4>Step-by-Step Process:</h4>
+                <ol class="step-list">
+                    <li>File detection → Script scans `inputs/` directory</li>
+                    <li>Progress check → Checks if file already processed</li>
+                    <li>Data loading → Reads CSV/Excel file</li>
+                    <li>Data validation → Checks data types and constraints</li>
+                    <li>Duplicate detection → Compares row hashes with database</li>
+                    <li>Duplicate export → Duplicates go to `duplicates/to_process/`</li>
+                    <li>New rows insertion → Only unique rows are inserted</li>
+                    <li>Progress tracking → Records in `processing_progress.json`</li>
+                </ol>
+                
+                <div class="example-box">
+                    <div class="example-title">Example:</div>
+                    <p>File: <code>sales_20240101.csv</code> with 100 rows</p>
+                    <p>Database: 0 rows for this file</p>
+                    <p>Result: 100 new rows inserted, 0 duplicates</p>
+                </div>
+                
+                <div class="example-log">
+                    <span class="log-info">INFO - Processing file: sales_20240101.csv</span><br>
+                    <span class="log-info">INFO - Loaded 100 rows from sales_20240101.csv</span><br>
+                    <span class="log-info">INFO - Found 0 duplicate rows in sales_20240101.csv</span><br>
+                    <span class="log-info">INFO - Successfully inserted 100 rows to sales table</span>
+                </div>
+            </div>
+            
+            <div class="mode-card mode-cancel">
+                <div class="mode-header">
+                    <div class="mode-icon">C</div>
+                    <div class="mode-title">CANCEL & REPLACE</div>
+                </div>
+                <p><span class="mode-badge badge-red">Duplicates: N/A</span></p>
+                <p><span class="mode-badge badge-red">Performance: HEAVY</span></p>
+                <p><strong>Use Case:</strong> Corrections, complete replacement</p>
+                
+                <h4>Step-by-Step Process:</h4>
+                <ol class="step-list">
+                    <li>File detection → Scans `inputs/` directory</li>
+                    <li>Database search → Finds all rows with this `source_filename`</li>
+                    <li>DELETION → Deletes all existing rows for this file</li>
+                    <li>New data loading → Reads current file</li>
+                    <li>Validation → Validates data</li>
+                    <li>Insertion → Inserts all new rows</li>
+                    <li>Cleanup → Optionally deletes source file</li>
+                </ol>
+                
+                <div class="example-box">
+                    <div class="example-title">Example:</div>
+                    <p>File: <code>inventory_20240101.xlsx</code> (corrected version)</p>
+                    <p>Database: 50 old rows for this file</p>
+                    <p>Result: Deletes 50 old, inserts 60 new</p>
+                    <p>Total: 60 rows (new only)</p>
+                </div>
+                
+                <div class="example-log">
+                    <span class="log-info">INFO - CANCEL AND REPLACE mode: inventory_20240101.xlsx</span><br>
+                    <span class="log-info">INFO - Deleted 50 existing rows for inventory_20240101.xlsx</span><br>
+                    <span class="log-info">INFO - Loaded 60 rows from inventory_20240101.xlsx</span><br>
+                    <span class="log-info">INFO - Successfully inserted 60 rows to inventory table</span>
+                </div>
+            </div>
+            
+            <div class="mode-card mode-audit">
+                <div class="mode-header">
+                    <div class="mode-icon">A</div>
+                    <div class="mode-title">AUDIT Mode (Classic)</div>
+                </div>
+                <p><span class="mode-badge badge-green">Duplicates: EXPORTED</span></p>
+                <p><span class="mode-badge badge-yellow">Performance: GOOD</span></p>
+                <p><strong>Use Case:</strong> Rarely modified files</p>
+                
+                <h4>Step-by-Step Process:</h4>
+                <ol class="step-list">
+                    <li>File detection → Directory scan</li>
+                    <li>Timestamp check → Compares file modification date</li>
+                    <li>DECISION: If similar timestamp → SKIP file</li>
+                    <li>DECISION: If different timestamp → PROCESS like INSERT</li>
+                    <li>Processing → Same process as INSERT</li>
+                    <li>Logging → Shows if file skipped or processed</li>
+                </ol>
+                
+                <div class="example-box">
+                    <div class="example-title">Example:</div>
+                    <p>File: <code>weekly_20240101.xlsx</code> modified today</p>
+                    <p>Database: File processed yesterday</p>
+                    <p>Result: Processes file (changed)</p>
+                </div>
+                
+                <div class="example-log">
+                    <span class="log-info">INFO - CLASSIC AUDIT mode: weekly_20240101.xlsx</span><br>
+                    <span class="log-info">INFO - File changed: weekly_20240101.xlsx</span><br>
+                    <span class="log-info">INFO - Loaded 200 rows from weekly_20240101.xlsx</span><br>
+                    <span class="log-info">INFO - Successfully inserted 200 rows to weekly_reports table</span>
+                </div>
+            </div>
+            
+            <div class="mode-card mode-smart">
+                <div class="mode-header">
+                    <div class="mode-icon">S</div>
+                    <div class="mode-title">SMART AUDIT Mode</div>
+                </div>
+                <p><span class="mode-badge badge-red">Duplicates: SILENT</span></p>
+                <p><span class="mode-badge badge-green">Performance: EXCELLENT</span></p>
+                <p><strong>Use Case:</strong> Daily loads, stable data</p>
+                
+                <h4>Step-by-Step Process:</h4>
+                <ol class="step-list">
+                    <li>File check → File hash vs. progress tracking</li>
+                    <li>If file unchanged → SKIP completely (nothing to do)</li>
+                    <li>If file changed → Loads data</li>
+                    <li>Row hashes calculation → SHA256 hash for each row</li>
+                    <li>Database comparison → Finds all existing rows</li>
+                    <li>Filtering → Keep only NEW rows (hash not in database)</li>
+                    <li>Filtering → Silently ignore duplicates (no export)</li>
+                    <li>Insertion → Insert only new rows</li>
+                    <li>Statistics → Logs new vs. duplicates count</li>
+                </ol>
+                
+                <div class="example-box">
+                    <div class="example-title">Example:</div>
+                    <p>File: <code>daily_sales_20240101.csv</code> with 1000 rows</p>
+                    <p>Database: 900 rows already present</p>
+                    <p>Result: 900 ignored (silent), 100 new inserted</p>
+                    <p>No export to `duplicates/`</p>
+                </div>
+                
+                <div class="example-log">
+                    <span class="log-info">INFO - SMART AUDIT: daily_sales_20240101.csv</span><br>
+                    <span class="log-smart">INFO - SMART AUDIT: 900 duplicate rows (silently ignored)</span><br>
+                    <span class="log-smart">INFO - SMART AUDIT: 100 new rows inserted</span><br>
+                    <span class="log-smart">INFO - SMART AUDIT: 90% duplicate reduction efficiency</span>
+                </div>
+            </div>
+        </div>
+        
+        <h3>Configuration Examples for Each Mode</h3>
+        
+        <h4>Insert Mode Configuration</h4>
+        <div class="yaml-block">mode: "insert"</div>
+        
+        <h4>Cancel and Replace Mode Configuration</h4>
+        <div class="yaml-block">mode: "cancel_and_replace"</div>
+        
+        <h4>Audit Mode Configuration</h4>
+        <div class="yaml-block">mode: "audit"</div>
+        
+        <h4>Smart Audit Mode Configuration</h4>
+        <div class="yaml-block">mode: "smart_audit"</div>
+
+        <!-- Enhanced Logging with Colors -->
+        <span class="section-anchor" id="logging"></span>
+        <h2>6. Enhanced Logging with Colors</h2>
+        
+        <h3>Color System for Console Output</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Log Level</th>
+                    <th>Color</th>
+                    <th>ANSI Code</th>
+                    <th>Visual</th>
+                    <th>Purpose</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>DEBUG</strong></td>
+                    <td>Cyan</td>
+                    <td><code>\033[36m</code></td>
+                    <td><span class="color-box" style="background-color: #00cccc;"></span></td>
+                    <td>Detailed debugging information</td>
+                </tr>
+                <tr>
+                    <td><strong>INFO</strong></td>
+                    <td>White</td>
+                    <td><code>\033[37m</code></td>
+                    <td><span class="color-box" style="background-color: #ffffff; border: 1px solid #ccc;"></span></td>
+                    <td>Normal informational messages</td>
+                </tr>
+                <tr>
+                    <td><strong>WARNING</strong></td>
+                    <td>Yellow</td>
+                    <td><code>\033[33m</code></td>
+                    <td><span class="color-box" style="background-color: #ffcc00;"></span></td>
+                    <td>Warnings that need review</td>
+                </tr>
+                <tr>
+                    <td><strong>ERROR</strong></td>
+                    <td>Red</td>
+                    <td><code>\033[31m</code></td>
+                    <td><span class="color-box" style="background-color: #ff3333;"></span></td>
+                    <td>Errors requiring immediate action</td>
+                </tr>
+                <tr>
+                    <td><strong>CRITICAL</strong></td>
+                    <td>Red background, White text</td>
+                    <td><code>\033[41m\033[37m</code></td>
+                    <td><span class="color-box" style="background-color: #990000; color: white; text-align: center;">C</span></td>
+                    <td>Critical errors blocking processing</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Example Log Output</h3>
+        <div class="code-block" style="background-color: #1a1a1a; white-space: pre-wrap; color: #fff;">2024-01-15 10:30:45 - INFO - [loader_script.py:150] - Database connection successful
+2024-01-15 10:30:45 - INFO - Database connection pool initialized: 1-5 connections
+2024-01-15 10:30:45 - INFO - Database connection test successful
+2024-01-15 10:30:46 - INFO - Processing file 1/3: sales_20230101.csv
+2024-01-15 10:30:46 - INFO - SMART AUDIT: Processing sales_20230101.csv
+2024-01-15 10:30:46 - WARNING - SMART AUDIT: Found 15 duplicate rows in sales_20230101.csv (silently ignored)
+2024-01-15 10:30:47 - INFO - Processing file 2/3: sales_20230102.csv
+2024-01-15 10:30:47 - INFO - SMART AUDIT: Successfully inserted 135 new rows from sales_20230101.csv
+2024-01-15 10:30:47 - INFO - Processing sheet 2/3: 'Inventory'
+2024-01-15 10:30:48 - WARNING - Sheet 'Marketing' is empty or contains only headers
+2024-01-15 10:30:48 - WARNING - Exported 5 duplicate rows to duplicates/sales_20230101.csv
+2024-01-15 10:30:49 - ERROR - Database connection failed: connection to server at "localhost" (::1), port 5432 failed</div>
+        
+        <h3>Log Management Commands</h3>
+        <div class="bash-block"># View latest log (with colors in terminal)
+tail -f logs/processing_latest.log
+
+# View all logs
+ls -la logs/
+
+# Search for errors in logs (colored output)
+grep --color=always -i "error" logs/processing_latest.log
+grep --color=always -i "warning" logs/processing_latest.log
+grep --color=always -i "smart_audit" logs/processing_latest.log
+
+# Check log file sizes
+du -h logs/*.log
+
+# Monitor real-time processing
+tail -f logs/processing_latest.log | grep --color=always -E "(ERROR|WARNING|CRITICAL|SMART AUDIT)"
+
+# Count warnings
+grep -c "WARNING" logs/processing_latest.log</div>
+        
+        <h3>Debug Mode Configuration</h3>
+        <p>Enable detailed logging by modifying the script or using environment variable:</p>
+        
+        <h4>Option 1: Modify Script</h4>
+        <div class="code-block">logging.basicConfig(
+    level=logging.DEBUG,  # Change from INFO to DEBUG
+    format="%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
+    handlers=[
+        logging.FileHandler(log_filepath, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)</div>
+        
+        <h4>Option 2: Environment Variable</h4>
+        <div class="bash-block"># Set debug level via environment
+export LOG_LEVEL=DEBUG
+python loader_script.py
+
+# Or for maximum verbosity
+export LOG_LEVEL=DEBUG
+export VERBOSE=1
+python loader_script.py</div>
+
+        <!-- Error Recovery -->
+        <span class="section-anchor" id="error-recovery"></span>
+        <h2>7. Error Recovery</h2>
+        
+        <h3>Failed Rows Recovery Process</h3>
+        
+        <h4>Step 1: Automatic Detection & Export</h4>
+        <ul class="step-list">
+            <li>Failed rows automatically detected during insertion</li>
+            <li>Exported to `failed_rows/` directory with original filename</li>
+            <li>Error details in `_error_message` and `_failed_reason` columns</li>
+            <li>Guidance provided in `_GUIDANCE` column</li>
+        </ul>
+        
+        <h4>Step 2: Manual Correction</h4>
+        <ol class="step-list">
+            <li>Open failed rows file in `failed_rows/` directory</li>
+            <li>Review error details in `_error_message` column</li>
+            <li>Fix data issues based on failure reason</li>
+            <li>Remove metadata columns before reprocessing</li>
+        </ol>
+        
+        <h4>Step 3: Reprocessing</h4>
+        <ol class="step-list">
+            <li>Save corrected file with original filename</li>
+            <li>Move to `failed_rows/to_process/` directory</li>
+            <li>Run loader - corrected data will be processed automatically</li>
+        </ol>
+        
+        <h3>Failure Reason Codes</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Code</th>
+                    <th>Description</th>
+                    <th>Solution</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>DUPLICATE_KEY</strong></td>
+                    <td>Violates unique constraint</td>
+                    <td>Remove duplicates or update existing records</td>
+                </tr>
+                <tr>
+                    <td><strong>MISSING_REFERENCE</strong></td>
+                    <td>Violates foreign key constraint</td>
+                    <td>Ensure referenced records exist</td>
+                </tr>
+                <tr>
+                    <td><strong>DATA_TYPE_MISMATCH</strong></td>
+                    <td>Invalid input syntax</td>
+                    <td>Fix data types in source file</td>
+                </tr>
+                <tr>
+                    <td><strong>MISSING_REQUIRED_VALUE</strong></td>
+                    <td>Null value in required column</td>
+                    <td>Provide values for required columns</td>
+                </tr>
+                <tr>
+                    <td><strong>VALUE_TOO_LONG</strong></td>
+                    <td>Value exceeds column length</td>
+                    <td>Shorten values or alter column size</td>
+                </tr>
+                <tr>
+                    <td><strong>DEADLOCK</strong></td>
+                    <td>Database deadlock detected</td>
+                    <td>Automatic retry enabled</td>
+                </tr>
+                <tr>
+                    <td><strong>CONNECTION_ISSUE</strong></td>
+                    <td>Database connection problem</td>
+                    <td>Check database server and network</td>
+                </tr>
+                <tr>
+                    <td><strong>UNKNOWN_ERROR</strong></td>
+                    <td>Other database errors</td>
+                    <td>Check detailed error message</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Duplicate Resolution Process</h3>
+        
+        <div class="important">
+            <strong>Note:</strong> SMART AUDIT mode does NOT export duplicates to the `duplicates/` folder. Duplicates are silently ignored and logged.
+        </div>
+        
+        <h4>Step 1: Automatic Export</h4>
+        <ul class="step-list">
+            <li>Duplicates exported to `duplicates/` directory</li>
+            <li>Original filename preserved</li>
+            <li>Metadata columns added for resolution guidance</li>
+        </ul>
+        
+        <h4>Step 2: Manual Resolution</h4>
+        <ol class="step-list">
+            <li>Open duplicate file in `duplicates/` directory</li>
+            <li>Review conflict types using `_conflict_type` column</li>
+            <li>Follow guidance in `_GUIDANCE` column</li>
+            <li>Resolve conflicts according to business rules</li>
+            <li>Remove metadata columns before reprocessing</li>
+        </ol>
+        
+        <h4>Step 3: Reprocessing</h4>
+        <ol class="step-list">
+            <li>Save cleaned file with original filename</li>
+            <li>Move to `duplicates/to_process/` directory</li>
+            <li>Run loader - it will automatically detect and process</li>
+        </ol>
+
+        <!-- Error Reference Table -->
+        <span class="section-anchor" id="error-reference"></span>
+        <h2>8. Error Reference Table</h2>
+        
+        <h3>OS & File System Errors</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Function</th>
+                    <th>Category</th>
+                    <th>Error Description</th>
+                    <th>Err Code</th>
+                    <th>Solution</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>setup_logging()</td>
+                    <td>Directory Creation</td>
+                    <td>Permission denied</td>
+                    <td>13</td>
+                    <td>Check write permissions or use different directory</td>
+                </tr>
+                <tr>
+                    <td>_create_directory_structure()</td>
+                    <td>Directory Creation</td>
+                    <td>File exists</td>
+                    <td>17</td>
+                    <td>Normal condition, can be ignored</td>
+                </tr>
+                <tr>
+                    <td>_acquire_lock()</td>
+                    <td>File Locking</td>
+                    <td>Permission denied</td>
+                    <td>13</td>
+                    <td>Check write permissions in current directory</td>
+                </tr>
+                <tr>
+                    <td>_acquire_lock()</td>
+                    <td>File Locking</td>
+                    <td>Resource temporarily unavailable</td>
+                    <td>11</td>
+                    <td>Another instance running</td>
+                </tr>
+                <tr>
+                    <td>load_file()</td>
+                    <td>File Access</td>
+                    <td>No such file or directory</td>
+                    <td>2</td>
+                    <td>Verify file exists and path is correct</td>
+                </tr>
+                <tr>
+                    <td>load_file()</td>
+                    <td>File Access</td>
+                    <td>Permission denied</td>
+                    <td>13</td>
+                    <td>Check file read permissions</td>
+                </tr>
+                <tr>
+                    <td>_save_dataframe_by_format()</td>
+                    <td>File Writing</td>
+                    <td>Permission denied</td>
+                    <td>13</td>
+                    <td>Check write permissions in export directory</td>
+                </tr>
+                <tr>
+                    <td>_save_dataframe_by_format()</td>
+                    <td>File Writing</td>
+                    <td>No space left on device</td>
+                    <td>28</td>
+                    <td>Free up disk space</td>
+                </tr>
+                <tr>
+                    <td>_move_to_processed()</td>
+                    <td>File Operation</td>
+                    <td>Cross-device link</td>
+                    <td>18</td>
+                    <td>Copy and delete instead of move</td>
+                </tr>
+                <tr>
+                    <td>calculate_file_hash()</td>
+                    <td>File Access</td>
+                    <td>Too many open files</td>
+                    <td>24</td>
+                    <td>Increase ulimit or reduce concurrent operations</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Database Errors</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Function</th>
+                    <th>Category</th>
+                    <th>Error Description</th>
+                    <th>Err Code</th>
+                    <th>Solution</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>_initialize_pool()</td>
+                    <td>Connection</td>
+                    <td>Connection refused</td>
+                    <td>08001</td>
+                    <td>Start database service or check connection settings</td>
+                </tr>
+                <tr>
+                    <td>_initialize_pool()</td>
+                    <td>Authentication</td>
+                    <td>Password authentication failed</td>
+                    <td>28P01</td>
+                    <td>Verify credentials in global config</td>
+                </tr>
+                <tr>
+                    <td>_initialize_pool()</td>
+                    <td>Connection</td>
+                    <td>Database does not exist</td>
+                    <td>3D000</td>
+                    <td>Create database or use existing one</td>
+                </tr>
+                <tr>
+                    <td>create_table_if_not_exists()</td>
+                    <td>Schema</td>
+                    <td>Permission denied</td>
+                    <td>42501</td>
+                    <td>Grant CREATE privilege to user</td>
+                </tr>
+                <tr>
+                    <td>_bulk_insert_to_db()</td>
+                    <td>Data Integrity</td>
+                    <td>Unique violation</td>
+                    <td>23505</td>
+                    <td>Remove duplicates or update existing records</td>
+                </tr>
+                <tr>
+                    <td>_bulk_insert_to_db()</td>
+                    <td>Data Integrity</td>
+                    <td>Foreign key violation</td>
+                    <td>23503</td>
+                    <td>Ensure referenced records exist</td>
+                </tr>
+                <tr>
+                    <td>_bulk_insert_to_db()</td>
+                    <td>Data Integrity</td>
+                    <td>Not null violation</td>
+                    <td>23502</td>
+                    <td>Provide values for required columns</td>
+                </tr>
+                <tr>
+                    <td>_bulk_insert_to_db()</td>
+                    <td>Data Type</td>
+                    <td>Invalid text representation</td>
+                    <td>22P02</td>
+                    <td>Fix data types in source file</td>
+                </tr>
+                <tr>
+                    <td>_bulk_insert_to_db()</td>
+                    <td>Data Type</td>
+                    <td>String data right truncation</td>
+                    <td>22001</td>
+                    <td>Shorten values or alter column size</td>
+                </tr>
+                <tr>
+                    <td>_bulk_insert_to_db()</td>
+                    <td>Connection</td>
+                    <td>Connection reset</td>
+                    <td>08006</td>
+                    <td>Check database server and network</td>
+                </tr>
+                <tr>
+                    <td>_bulk_insert_to_db()</td>
+                    <td>Deadlock</td>
+                    <td>Deadlock detected</td>
+                    <td>40P01</td>
+                    <td>Retry operation (auto-retry enabled)</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Configuration & Validation Errors</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Function</th>
+                    <th>Category</th>
+                    <th>Error Description</th>
+                    <th>Err Code</th>
+                    <th>Solution</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>_load_global_config()</td>
+                    <td>Configuration</td>
+                    <td>YAML syntax error</td>
+                    <td>N/A</td>
+                    <td>Fix YAML syntax in global config file</td>
+                </tr>
+                <tr>
+                    <td>_load_processing_rules()</td>
+                    <td>Configuration</td>
+                    <td>Directory should be under inputs/</td>
+                    <td>N/A</td>
+                    <td>Move data directories under inputs/ folder</td>
+                </tr>
+                <tr>
+                    <td>_load_processing_rules()</td>
+                    <td>Configuration</td>
+                    <td>Invalid processing_method</td>
+                    <td>N/A</td>
+                    <td>Use: specific, multiple, all, or pattern</td>
+                </tr>
+                <tr>
+                    <td>_validate_setup()</td>
+                    <td>Setup</td>
+                    <td>Mapping file not found</td>
+                    <td>N/A</td>
+                    <td>Create mapping file in rules/ directory</td>
+                </tr>
+                <tr>
+                    <td>_validate_setup()</td>
+                    <td>Setup</td>
+                    <td>Table creation failed</td>
+                    <td>N/A</td>
+                    <td>Check database permissions and mapping file</td>
+                </tr>
+                <tr>
+                    <td>_handle_new_columns()</td>
+                    <td>Schema</td>
+                    <td>New columns detected</td>
+                    <td>N/A</td>
+                    <td>Configure new columns in mapping file</td>
+                </tr>
+                <tr>
+                    <td>validate_dataframe()</td>
+                    <td>Data Validation</td>
+                    <td>Reserved column names used</td>
+                    <td>N/A</td>
+                    <td>Rename columns to avoid reserved names</td>
+                </tr>
+                <tr>
+                    <td>validate_dataframe()</td>
+                    <td>Data Validation</td>
+                    <td>Missing required columns</td>
+                    <td>N/A</td>
+                    <td>Add missing columns to source file</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Excel & File Format Errors</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Function</th>
+                    <th>Category</th>
+                    <th>Error Description</th>
+                    <th>Err Code</th>
+                    <th>Solution</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>_load_excel()</td>
+                    <td>Excel Processing</td>
+                    <td>Sheet not found</td>
+                    <td>N/A</td>
+                    <td>Check sheet names in Excel file</td>
+                </tr>
+                <tr>
+                    <td>_load_excel()</td>
+                    <td>Excel Processing</td>
+                    <td>File is not a zip file</td>
+                    <td>N/A</td>
+                    <td>Verify file integrity and format</td>
+                </tr>
+                <tr>
+                    <td>_load_excel()</td>
+                    <td>Excel Processing</td>
+                    <td>Permission denied</td>
+                    <td>13</td>
+                    <td>Close file in Excel or other program</td>
+                </tr>
+                <tr>
+                    <td>_load_csv()</td>
+                    <td>CSV Processing</td>
+                    <td>Error tokenizing data</td>
+                    <td>N/A</td>
+                    <td>Fix CSV format and delimiters</td>
+                </tr>
+                <tr>
+                    <td>get_excel_sheet_names()</td>
+                    <td>Excel Access</td>
+                    <td>File contains corrupted data</td>
+                    <td>N/A</td>
+                    <td>Repair or recreate Excel file</td>
+                </tr>
+                <tr>
+                    <td>_save_dataframe_by_format()</td>
+                    <td>Export</td>
+                    <td>Engine 'openpyxl' not found</td>
+                    <td>N/A</td>
+                    <td>Install: pip install openpyxl</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <!-- Troubleshooting -->
+        <span class="section-anchor" id="troubleshooting"></span>
+        <h2>9. Troubleshooting</h2>
+        
+        <h3>Common Issues & Solutions</h3>
+        
+        <h4>Database Connection Issues</h4>
+        <div class="bash-block"># Test connection manually
+psql -h localhost -U your_username -d your_database
+
+# Check configuration
+cat global_loader_config.yaml | grep -E "(host|port|dbname|user)"
+
+# Test with Python
+python -c "
+import psycopg2
+try:
+    conn = psycopg2.connect(
+        dbname='your_database_name',
+        user='your_username', 
+        password='your_password',
+        host='localhost',
+        port=5432
+    )
+    print('Connection successful')
+    conn.close()
+except Exception as e:
+    print(f'Connection failed: {e}')
+"</div>
+        
+        <h4>File Permission Issues</h4>
+        <div class="bash-block"># Check file permissions
+ls -la inputs/sales_data/
+ls -la logs/
+
+# Fix permissions if needed
+chmod 644 inputs/sales_data/*.csv
+chmod 755 inputs/sales_data/
+chmod 755 logs/</div>
+        
+        <h4>Multi-Sheet Configuration Issues</h4>
+        <div class="code-block"># Quick sheet name check
+import pandas as pd
+
+def diagnose_excel_issue(file_path, expected_sheets):
+    try:
+        xl_file = pd.ExcelFile(file_path)
+        actual_sheets = xl_file.sheet_names
+        print(f"File: {file_path}")
+        print(f"Available sheets: {actual_sheets}")
+        print(f"Expected sheets: {expected_sheets}")
+        
+        missing_sheets = set(expected_sheets) - set(actual_sheets)
+        if missing_sheets:
+            print(f"Missing sheets: {missing_sheets}")
+            
+        return actual_sheets
+    except Exception as e:
+        print(f"Error: {e}")
+        return []
+
+# Usage
+diagnose_excel_issue("inputs/inventory_data/inventory_20230101.xlsx", ["Sheet1", "Sheet2"])</div>
+        
+        <h4>Lock File Issues</h4>
+        <div class="bash-block"># Remove stale lock file
+rm -f loader.lock
+
+# Check if another instance is running
+ps aux | grep loader_script.py
+
+# Check lock file age
+if [ -f loader.lock ]; then
+    lock_age=$(($(date +%s) - $(stat -f %m loader.lock)))
+    echo "Lock file age: ${lock_age}s"
+    if [ $lock_age -gt 3600 ]; then
+        echo "Removing stale lock file"
+        rm loader.lock
+    fi
+fi</div>
+        
+        <h4>SMART AUDIT Mode Troubleshooting</h4>
+        <div class="code-block"># Debug SMART AUDIT mode
+import hashlib
+import pandas as pd
+import json
+
+def debug_smart_audit_mode(file_path, table_name):
+    """Debug SMART AUDIT mode processing issues"""
+    
+    # Calculate file hash for progress tracking
+    def calculate_file_hash(filepath):
+        hash_sha256 = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+    
+    file_hash = calculate_file_hash(file_path)
+    print(f"File: {file_path}")
+    print(f"File Hash: {file_hash}")
+    
+    # Calculate sample row hashes
+    df = pd.read_csv(file_path, nrows=10)
+    if not df.empty:
+        print(f"Sample data: {len(df)} rows")
+        
+        # Calculate row hash for first row (example)
+        row = df.iloc[0].to_dict()
+        row_str = json.dumps(row, sort_keys=True, default=str)
+        row_hash = hashlib.sha256(row_str.encode()).hexdigest()
+        print(f"Sample row hash: {row_hash[:16]}...")
+
+# Usage
+debug_smart_audit_mode("inputs/sales_data/sales_20230101.csv", "sales_table")</div>
+
+        <!-- Best Practices -->
+        <span class="section-anchor" id="best-practices"></span>
+        <h2>10. Best Practices</h2>
+        
+        <h3>File Management</h3>
+        <ul class="step-list">
+            <li>Use consistent naming conventions in `inputs/` directories</li>
+            <li>Organize files by source system or frequency</li>
+            <li>Implement retention policies for processed files</li>
+            <li>Regularly clean `to_process` directories</li>
+            <li>Monitor disk space in `logs/` directory</li>
+        </ul>
+        
+        <h3>Multi-Sheet Excel Best Practices</h3>
+        <ul class="step-list">
+            <li>Use exact sheet names: Case-sensitive matching</li>
+            <li>Validate sheet existence before configuring</li>
+            <li>List format: Always use YAML list format for multiple sheets</li>
+            <li>Consistent structure: Ensure all processed sheets have same columns</li>
+            <li>Sheet naming: Use descriptive, consistent sheet names</li>
+        </ul>
+        
+        <h3>Enhanced Log Management</h3>
+        <ul class="step-list">
+            <li>Monitor `logs/` directory for growing file sizes</li>
+            <li>Implement log rotation for long-running processes</li>
+            <li>Use `processing_latest.log` symlink for easy access</li>
+            <li>Regular review of warning and error patterns</li>
+            <li>Archive old logs based on retention policy</li>
+            <li>Use color-coded logs for quick visual identification of issues</li>
+        </ul>
+        
+        <h3>SMART AUDIT Mode Best Practices</h3>
+        <ul class="step-list">
+            <li>Use `smart_audit` mode for daily incremental loads where most data is unchanged</li>
+            <li>Monitor duplicate statistics in logs to understand data change patterns</li>
+            <li>Combine with progress tracking for optimal performance (unchanged files are skipped entirely)</li>
+            <li>Use for high-volume data to avoid duplicate export overhead</li>
+            <li>Consider using `insert` mode with duplicate export when manual review of duplicates is required</li>
+        </ul>
+        
+        <h3>Performance Optimization</h3>
+        <ul class="step-list">
+            <li>Use appropriate `batch_size` for your data volume</li>
+            <li>Configure `hash_exclude_columns` for large text/binary columns</li>
+            <li>Set `search_subdirectories: false` for flat directory structures</li>
+            <li>Monitor database performance during large loads</li>
+            <li>Adjust `chunk_size` based on database performance</li>
+        </ul>
+        
+        <h3>Security</h3>
+        <ul class="step-list">
+            <li>Secure database credentials in configuration files in `rules/` folder</li>
+            <li>Restrict file permissions on sensitive data directories in `inputs/`</li>
+            <li>Regularly review processing logs in `logs/` for anomalies</li>
+            <li>Implement access controls for source directories</li>
+            <li>Protect log files from unauthorized access</li>
+        </ul>
+
+        <!-- Command Reference -->
+        <span class="section-anchor" id="commands"></span>
+        <h2>11. Command Reference</h2>
+        
+        <h3>Basic Usage</h3>
+        <div class="bash-block"># Standard processing
+python loader_script.py
+
+# Test database connection  
+python loader_script.py --test-connection
+
+# Run with file deletion
+python loader_script.py --delete-files Y
+
+# Create sample configuration and data
+python loader_script.py --setup</div>
+        
+        <h3>Utility Commands</h3>
+        <div class="bash-block"># Check directory structure
+find . -type d -name "inputs" -o -name "rules" -o -name "duplicates" -o -name "format_conflict" -o -name "failed_rows" -o -name "logs" | sort
+
+# Check log files
+ls -la logs/
+tail -n 50 logs/processing_latest.log
+
+# Check for stale lock files
+find . -name "loader.lock" -mtime +1 -exec ls -la {} \;
+
+# Clean old progress data (keep last 30 days)
+find . -name "processing_progress.json" -mtime +30 -exec rm {} \;
+
+# Archive processed files
+tar -czf processed_$(date +%Y%m%d).tar.gz duplicates/processed/ format_conflict/processed/ failed_rows/processed/
+
+# Check for old failed rows (older than 7 days)
+find failed_rows/ -name "*.csv" -mtime +7 -exec ls -la {} \;
+
+# Check SMART AUDIT mode statistics
+grep -r "SMART AUDIT:" logs/
+
+# Monitor real-time processing with colors
+tail -f logs/processing_latest.log | grep --color=always -E "(ERROR|WARNING|CRITICAL)"</div>
+        
+        <h3>Verification Script (verify_structure.sh)</h3>
+        <div class="bash-block">#!/bin/bash
+echo "Verifying enhanced PostgreSQL Data Loader structure..."
+
+# Check required directories
+required_dirs=(
+    "rules"
+    "inputs/sales_data"
+    "inputs/inventory_data" 
+    "inputs/weekly_reports"
+    "duplicates/to_process"
+    "duplicates/processed"
+    "format_conflict/to_process"
+    "format_conflict/processed"
+    "failed_rows/to_process"
+    "failed_rows/processed"
+    "logs"
+)
+
+for dir in "${required_dirs[@]}"; do
+    if [ -d "$dir" ]; then
+        echo "✅ $dir exists"
+    else
+        echo "❌ $dir missing"
+    fi
+done
+
+# Check essential files
+essential_files=(
+    "loader_script.py"
+    "global_loader_config.yaml"
+)
+
+for file in "${essential_files[@]}"; do
+    if [ -f "$file" ]; then
+        echo "✅ $file exists"
+    else
+        echo "❌ $file missing"
+    fi
+done
+
+echo ""
+echo "Structure verification completed!"</div>
+        
+        <h3>Support & Resources</h3>
+        <div class="important">
+            <strong>Getting Help:</strong><br>
+            1. <strong>Check Logs</strong>: <code>tail -f logs/processing_latest.log</code><br>
+            2. <strong>Verify Configuration</strong>: Validate YAML syntax in <code>rules/</code> folder<br>
+            3. <strong>Test Connectivity</strong>: Use <code>--test-connection</code> option<br>
+            4. <strong>Review Examples</strong>: Refer to sample configurations in <code>rules/</code> folder<br>
+            5. <strong>Check Error Reference</strong>: Use the comprehensive error table above<br>
+            6. <strong>Examine Failed Rows</strong>: Review files in <code>failed_rows/</code> directory<br>
+            7. <strong>Check SMART AUDIT Statistics</strong>: Search for "SMART AUDIT:" in logs<br>
+            8. <strong>Use Color Coding</strong>: Leverage color-coded logs for quick issue identification
+        </div>
+
+        <div class="footer">
+            <p><strong>PostgreSQL Data Loader - Complete User Guide</strong></p>
+            <p>Version 2.0 | Enhanced with SMART AUDIT Mode & Colored Logging</p>
+            <p>Last Updated: January 2024 | Complete documentation with all features and examples</p>
+        </div>
+    </div>
+    
+    <script>
+        // Smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                
+                const targetId = this.getAttribute('href');
+                if (targetId === '#') return;
+                
+                const targetElement = document.querySelector(targetId);
+                if (targetElement) {
+                    window.scrollTo({
+                        top: targetElement.offsetTop - 20,
+                        behavior: 'smooth'
+                    });
+                }
+            });
+        });
+        
+        // Highlight current section in TOC
+        window.addEventListener('scroll', function() {
+            const sections = document.querySelectorAll('h2, h3');
+            const scrollPos = window.scrollY + 100;
+            
+            let currentSection = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                const sectionHeight = section.clientHeight;
+                
+                if (scrollPos >= sectionTop && scrollPos < sectionTop + sectionHeight) {
+                    currentSection = section.id;
+                }
+            });
+            
+            document.querySelectorAll('.toc a').forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === `#${currentSection}`) {
+                    link.classList.add('active');
+                    link.style.color = '#1a5276';
+                    link.style.fontWeight = 'bold';
+                } else {
+                    link.style.color = '';
+                    link.style.fontWeight = '';
+                }
+            });
+        });
+        
+        // Copy code blocks on click
+        document.querySelectorAll('.code-block, .bash-block, .yaml-block, .directory-tree').forEach(block => {
+            block.addEventListener('click', function() {
+                const text = this.textContent;
+                navigator.clipboard.writeText(text).then(() => {
+                    const originalBorder = this.style.border;
+                    this.style.border = '2px solid #27ae60';
+                    this.style.transition = 'border 0.3s';
+                    
+                    setTimeout(() => {
+                        this.style.border = originalBorder;
+                    }, 1000);
+                });
+            });
+        });
+    </script>
+</body>
+</html>
