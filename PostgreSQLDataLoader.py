@@ -3,6 +3,7 @@
 PostgreSQL Data Loader - Enhanced with Failed Rows Recovery & Precise OS Error Logging
 Organized Directory Structure: rules/ for configs, inputs/ for data
 WITH SMART AUDIT MODE: Intelligent deduplication without exporting duplicates
+WITH PER-RULE PROGRESS TRACKING: Separate progress files for each rule
 """
 
 import os
@@ -33,7 +34,7 @@ from contextlib import contextmanager
 # Constants
 # ===========================
 DEFAULT_BATCH_SIZE = 1000
-PROGRESS_FILE = "processing_progress.json"
+PROGRESS_FILE = "processing_progress.json"  # Kept for backward compatibility
 GLOBAL_CONFIG_FILE = "global_loader_config.yaml"
 RESERVED_COLUMNS = {"loaded_timestamp", "source_filename", "content_hash", "operation"}
 HASH_EXCLUDE_COLS = RESERVED_COLUMNS
@@ -842,13 +843,21 @@ class DataValidator:
         return True, errors
 
 # ===========================
-# Hybrid Progress Tracker
+# Hybrid Progress Tracker - ENHANCED with per-rule progress files
 # ===========================
 class HybridProgressTracker:
-    """Tracks processing progress for resume capability with hybrid timestamp/hash checking."""
+    """Tracks processing progress for resume capability with per-rule progress files."""
 
-    def __init__(self, progress_file: str = PROGRESS_FILE):
-        self.progress_file = progress_file
+    def __init__(self, rule_name: str = None, rules_folder: str = "rules"):
+        self.rule_name = rule_name
+        self.rules_folder = rules_folder
+        
+        # Determine progress file name
+        if rule_name:
+            self.progress_file = os.path.join(rules_folder, f"{rule_name}_progress.json")
+        else:
+            self.progress_file = PROGRESS_FILE  # Fallback to global file
+            
         self.processed_files = self._load_progress()
 
     @log_os_operations
@@ -857,28 +866,40 @@ class HybridProgressTracker:
             try:
                 with open(self.progress_file, 'r') as f:
                     data = json.load(f)
-                    logger.info(f"Loaded progress data from {self.progress_file}: {len(data)} files tracked")
+                    logger.info(f"Loaded progress data for rule '{self.rule_name}': {self.progress_file} ({len(data)} files tracked)")
                     return data
+            except json.JSONDecodeError as e:
+                logger.warning(f"Corrupt progress file {self.progress_file}: {e}. Starting fresh.")
+                return {}
             except Exception as e:
                 logger.warning(f"Could not load progress file {self.progress_file}: {e}")
+                return {}
         else:
-            logger.info(f"Progress file {self.progress_file} does not exist, starting fresh")
+            logger.debug(f"Progress file {self.progress_file} does not exist, starting fresh")
         return {}
 
     @log_os_operations
     def save_progress(self) -> None:
         try:
+            # Ensure rules folder exists
+            os.makedirs(self.rules_folder, exist_ok=True)
+            
             with open(self.progress_file, 'w') as f:
                 json.dump(self.processed_files, f, indent=2)
-            logger.debug(f"Progress saved to {self.progress_file}: {len(self.processed_files)} files")
+            logger.debug(f"Progress saved for rule '{self.rule_name}': {self.progress_file} ({len(self.processed_files)} files)")
         except Exception as e:
             logger.error(f"Could not save progress to {self.progress_file}: {e}")
 
     def get_tracking_key(self, filepath: Path, file_context: FileContext) -> str:
         # Include sheet name in tracking key for multi-sheet Excel files
         sheet_suffix = f"::{file_context.source_sheet}" if file_context.source_sheet else ""
-        key = f"{filepath}{sheet_suffix}||{file_context.target_table}"
-        logger.debug(f"Generated tracking key: {key}")
+        # Use relative path for cleaner keys
+        try:
+            rel_path = filepath.relative_to(Path.cwd())
+            key = f"{rel_path}{sheet_suffix}"
+        except ValueError:
+            key = f"{filepath}{sheet_suffix}"
+        logger.debug(f"Generated tracking key for rule '{self.rule_name}': {key}")
         return key
 
     @log_os_operations
@@ -906,7 +927,7 @@ class HybridProgressTracker:
             'source_sheet': file_context.source_sheet
         }
         config_hash = hashlib.sha256(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
-        logger.debug(f"Calculated config hash: {config_hash[:16]}...")
+        logger.debug(f"Calculated config hash for rule '{self.rule_name}': {config_hash[:16]}...")
         return config_hash
 
     def needs_processing(self, filepath: Path, file_context: FileContext) -> bool:
@@ -920,7 +941,7 @@ class HybridProgressTracker:
 
         # New file - definitely process
         if not stored_info:
-            logger.debug(f"New file detected: {filepath}")
+            logger.debug(f"Rule '{self.rule_name}': New file detected: {filepath}")
             return True
 
         try:
@@ -932,10 +953,10 @@ class HybridProgressTracker:
                 stored_config_hash = stored_info.get('config_hash', '')
 
                 if current_config_hash == stored_config_hash:
-                    logger.debug(f"File unchanged (timestamp match): {filepath}")
+                    logger.debug(f"Rule '{self.rule_name}': File unchanged (timestamp match): {filepath}")
                     return False
                 else:
-                    logger.info(f"Configuration changed for: {filepath}")
+                    logger.info(f"Rule '{self.rule_name}': Configuration changed for: {filepath}")
                     return True
         except Exception as e:
             logger.warning(f"Error checking timestamp for {filepath}: {e}")
@@ -953,10 +974,10 @@ class HybridProgressTracker:
         if (current_content_hash == stored_content_hash and
                 current_config_hash == stored_config_hash):
             self.mark_processed(filepath, file_context)
-            logger.debug(f"File unchanged (hash match): {filepath}")
+            logger.debug(f"Rule '{self.rule_name}': File unchanged (hash match): {filepath}")
             return False
 
-        logger.info(f"File changed: {filepath}")
+        logger.info(f"Rule '{self.rule_name}': File changed: {filepath}")
         return True
 
     def mark_processed(self, filepath: Path, file_context: FileContext) -> None:
@@ -968,10 +989,13 @@ class HybridProgressTracker:
         self.processed_files[tracking_key] = {
             "timestamp": current_mod_time.isoformat(),
             "hash": current_content_hash,
-            "config_hash": current_config_hash
+            "config_hash": current_config_hash,
+            "rule": self.rule_name,
+            "target_table": file_context.target_table,
+            "processed_at": datetime.now().isoformat()
         }
         self.save_progress()
-        logger.debug(f"Marked file as processed: {filepath}")
+        logger.info(f"Rule '{self.rule_name}': Marked file as processed: {filepath}")
 
 # ===========================
 # Enhanced File Processor with Multi-Sheet Excel Support & OS logging
@@ -1196,7 +1220,7 @@ class FileProcessor:
         return False
 
 # ===========================
-# Enhanced Main Loader with SMART AUDIT MODE
+# Enhanced Main Loader with SMART AUDIT MODE and PER-RULE PROGRESS TRACKING
 # ===========================
 class PostgresLoader:
     """Main loader class with organized directory structure and enhanced error handling."""
@@ -1215,7 +1239,16 @@ class PostgresLoader:
         self.db_manager = DatabaseManager(self.config.get_db_config(), self.config)
         self.validator = DataValidator(self.config)
         self.file_processor = FileProcessor(self.config)
-        self.progress_tracker = HybridProgressTracker() if self.config.enable_progress_tracking else None
+        
+        # ENHANCED: Create per-rule progress trackers
+        self.rule_progress_trackers = {}
+        if self.config.enable_progress_tracking:
+            for rule in self.processing_rules:
+                self.rule_progress_trackers[rule.base_name] = HybridProgressTracker(
+                    rule_name=rule.base_name,
+                    rules_folder=rules_folder_path
+                )
+            logger.info(f"Created {len(self.rule_progress_trackers)} per-rule progress trackers")
 
         self.global_start_row = global_start_row
         self.global_start_col = global_start_col
@@ -1381,6 +1414,13 @@ class PostgresLoader:
 
         logger.info(f"Successfully loaded {len(rules)} processing rules")
         return rules
+
+    # ---------------------------
+    # Helper method to get progress tracker for a rule
+    # ---------------------------
+    def _get_progress_tracker_for_rule(self, rule_name: str) -> Optional[HybridProgressTracker]:
+        """Get progress tracker for a specific rule."""
+        return self.rule_progress_trackers.get(rule_name)
 
     # ---------------------------
     # Column name sanitization & type inference
@@ -2291,10 +2331,11 @@ class PostgresLoader:
         logger.info(f"=== SMART AUDIT: Processing {file_context.filename} ===")
         
         # 1. Check if file needs processing (binary hash comparison)
-        if self.progress_tracker:
-            needs_processing = self.progress_tracker.needs_processing(file_context.filepath, file_context)
+        tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+        if tracker:
+            needs_processing = tracker.needs_processing(file_context.filepath, file_context)
             if not needs_processing:
-                logger.info(f"SMART AUDIT: File unchanged (hash match): {file_context.filename}")
+                logger.info(f"SMART AUDIT (Rule '{file_context.target_table}'): File unchanged: {file_context.filename}")
                 return True  # File unchanged = success (nothing to do)
         
         # 2. Load the file
@@ -2335,8 +2376,9 @@ class PostgresLoader:
         if clean_df.empty:
             logger.warning(f"SMART AUDIT: No valid rows to process in {file_context.filename}")
             # Still mark as processed in progress tracker
-            if self.progress_tracker:
-                self.progress_tracker.mark_processed(file_context.filepath, file_context)
+            tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+            if tracker:
+                tracker.mark_processed(file_context.filepath, file_context)
             return True
         
         # 8. Calculate row hashes (exclude temporal columns)
@@ -2358,13 +2400,14 @@ class PostgresLoader:
         # 11. Log statistics (no export of duplicates)
         if not duplicate_df.empty:
             duplicate_count = len(duplicate_df)
-            logger.info(f"SMART AUDIT: Found {duplicate_count} duplicate rows in {file_context.filename} (silently ignored)")
+            logger.info(f"SMART AUDIT (Rule '{file_context.target_table}'): Found {duplicate_count} duplicate rows in {file_context.filename} (silently ignored)")
         
         if new_df.empty:
-            logger.info(f"SMART AUDIT: No new rows to insert from {file_context.filename}")
+            logger.info(f"SMART AUDIT (Rule '{file_context.target_table}'): No new rows to insert from {file_context.filename}")
             # Mark as processed in progress tracker
-            if self.progress_tracker:
-                self.progress_tracker.mark_processed(file_context.filepath, file_context)
+            tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+            if tracker:
+                tracker.mark_processed(file_context.filepath, file_context)
             return True
         
         # 12. Prepare for insertion: rename columns to target names
@@ -2383,8 +2426,9 @@ class PostgresLoader:
             success = self._bulk_insert_to_db(insert_df, file_context.target_table)
             
             # Mark as processed in progress tracker if successful
-            if success and self.progress_tracker:
-                self.progress_tracker.mark_processed(file_context.filepath, file_context)
+            tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+            if success and tracker:
+                tracker.mark_processed(file_context.filepath, file_context)
             
             # Handle file deletion if configured
             if success and self.delete_files:
@@ -2395,14 +2439,14 @@ class PostgresLoader:
                     logger.warning(f"SMART AUDIT: Could not delete file {file_context.filepath}: {e}")
             
             if success:
-                logger.info(f"SMART AUDIT: Successfully inserted {len(new_df)} new rows from {file_context.filename}")
+                logger.info(f"SMART AUDIT (Rule '{file_context.target_table}'): Successfully inserted {len(new_df)} new rows from {file_context.filename}")
             else:
-                logger.error(f"SMART AUDIT: Failed to insert rows from {file_context.filename}")
+                logger.error(f"SMART AUDIT (Rule '{file_context.target_table}'): Failed to insert rows from {file_context.filename}")
             
             return success
             
         except Exception as e:
-            logger.error(f"SMART AUDIT: Load failed for {file_context.filename}: {e}", exc_info=True)
+            logger.error(f"SMART AUDIT (Rule '{file_context.target_table}'): Load failed for {file_context.filename}: {e}", exc_info=True)
             return False
     
     def _process_classic_audit(self, file_context: FileContext) -> bool:
@@ -2421,13 +2465,14 @@ class PostgresLoader:
                 file_context.file_modified_timestamp, 
                 file_context.filename
             ):
-                logger.info(f"CLASSIC AUDIT: Skipping {file_context.filename} (already processed with similar timestamp)")
+                logger.info(f"CLASSIC AUDIT (Rule '{file_context.target_table}'): Skipping {file_context.filename} (already processed with similar timestamp)")
                 # Still mark as processed in progress tracker
-                if self.progress_tracker:
-                    self.progress_tracker.mark_processed(file_context.filepath, file_context)
+                tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+                if tracker:
+                    tracker.mark_processed(file_context.filepath, file_context)
                 return True  # File already processed = success
         except Exception as e:
-            logger.error(f"CLASSIC AUDIT: Audit check failed for {file_context.filename}: {e}")
+            logger.error(f"CLASSIC AUDIT (Rule '{file_context.target_table}'): Audit check failed for {file_context.filename}: {e}")
         
         # If not processed, proceed with normal insert mode
         return self._process_insert(file_context)
@@ -2448,9 +2493,9 @@ class PostgresLoader:
                     file_context.target_table, 
                     file_context.filename
                 )
-                logger.info(f"CANCEL AND REPLACE: Deleted {deleted_count} existing rows for {file_context.filename}")
+                logger.info(f"CANCEL AND REPLACE (Rule '{file_context.target_table}'): Deleted {deleted_count} existing rows for {file_context.filename}")
         except Exception as e:
-            logger.error(f"CANCEL AND REPLACE: Failed to delete existing rows for {file_context.filename}: {e}")
+            logger.error(f"CANCEL AND REPLACE (Rule '{file_context.target_table}'): Failed to delete existing rows for {file_context.filename}: {e}")
         
         # Process file as normal insert
         return self._process_insert(file_context)
@@ -2480,8 +2525,9 @@ class PostgresLoader:
         success = self._process_dataframe(df, file_context)
         
         # Mark as processed in progress tracker if successful
-        if success and self.progress_tracker:
-            self.progress_tracker.mark_processed(file_context.filepath, file_context)
+        tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+        if success and tracker:
+            tracker.mark_processed(file_context.filepath, file_context)
         
         # Handle file deletion if configured
         if success and self.delete_files and not any([
@@ -2557,14 +2603,14 @@ class PostgresLoader:
         if not duplicates_df.empty:
             # Enhanced duplicate analysis
             duplicate_count = len(duplicates_df)
-            logger.info(f"Found {duplicate_count} potential duplicates in {file_context.filename}")
+            logger.info(f"Rule '{file_context.target_table}': Found {duplicate_count} potential duplicates in {file_context.filename}")
             
             # Export duplicates for manual resolution
             self._export_duplicates(duplicates_df, file_context)
-            logger.warning(f"Exported {duplicate_count} duplicate rows from {file_context.filename} to {DUPLICATES_ROOT_DIR}")
+            logger.warning(f"Rule '{file_context.target_table}': Exported {duplicate_count} duplicate rows from {file_context.filename} to {DUPLICATES_ROOT_DIR}")
 
         if unique_df.empty:
-            logger.info(f"No new unique rows to load from {file_context.filename}")
+            logger.info(f"Rule '{file_context.target_table}': No new unique rows to load from {file_context.filename}")
             return True
 
         # Prepare for DB insert: rename columns to target names based on mapping
@@ -2588,7 +2634,7 @@ class PostgresLoader:
                 
             return success
         except Exception as e:
-            logger.error(f"Load failed for {file_context.filename}: {e}", exc_info=True)
+            logger.error(f"Rule '{file_context.target_table}': Load failed for {file_context.filename}: {e}", exc_info=True)
             return False
 
     # ---------------------------
@@ -2619,6 +2665,9 @@ class PostgresLoader:
                 logger.warning(f"Skipping rule '{rule.target_table}' because it's blocked: {self.blocked_rules[rule.target_table]}")
                 continue
                 
+            # Get rule-specific progress tracker
+            tracker = self._get_progress_tracker_for_rule(rule.target_table)
+            
             rule_source_dir = Path(rule.directory)
             if not rule_source_dir.exists():
                 logger.warning(f"Source directory not found: {rule_source_dir}")
@@ -2811,31 +2860,34 @@ class PostgresLoader:
                 logger.debug(f"Including {fc.filename} (special processing file)")
                 continue
 
+            # Get tracker for this rule
+            tracker = self._get_progress_tracker_for_rule(fc.target_table)
+            
             # For smart_audit mode, we rely on progress_tracker for file-level deduplication
             # For classic audit mode, we do the database check
             if fc.mode == "smart_audit":
-                if self.progress_tracker:
-                    needs_processing = self.progress_tracker.needs_processing(fc.filepath, fc)
+                if tracker:
+                    needs_processing = tracker.needs_processing(fc.filepath, fc)
                     if not needs_processing:
-                        logger.info(f"SMART AUDIT: Skipping unchanged file: {fc.filename}")
+                        logger.info(f"SMART AUDIT (Rule '{fc.target_table}'): Skipping unchanged file: {fc.filename}")
                         skipped_files += 1
                         continue
             elif fc.mode == "audit":
                 try:
                     if self.db_manager.file_exists_in_db(fc.target_table, fc.file_modified_timestamp, fc.filename):
-                        logger.info(f"CLASSIC AUDIT: Skipping {fc.filename}: Already processed with similar timestamp")
-                        if self.progress_tracker:
-                            self.progress_tracker.mark_processed(fc.filepath, fc)
+                        logger.info(f"CLASSIC AUDIT (Rule '{fc.target_table}'): Skipping {fc.filename}: Already processed")
+                        if tracker:
+                            tracker.mark_processed(fc.filepath, fc)
                         skipped_files += 1
                         continue
                 except Exception as e:
                     logger.error(f"Audit check failed for {fc.filename}: {e}")
             else:
                 # For insert and cancel_and_replace modes, use progress tracker if enabled
-                if self.progress_tracker:
-                    needs_processing = self.progress_tracker.needs_processing(fc.filepath, fc)
+                if tracker:
+                    needs_processing = tracker.needs_processing(fc.filepath, fc)
                     if not needs_processing:
-                        logger.info(f"INSERT/CANCEL: Skipping unchanged file: {fc.filename}")
+                        logger.info(f"INSERT/CANCEL (Rule '{fc.target_table}'): Skipping unchanged file: {fc.filename}")
                         skipped_files += 1
                         continue
 
