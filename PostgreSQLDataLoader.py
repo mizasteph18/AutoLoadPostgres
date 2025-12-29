@@ -4,6 +4,7 @@ PostgreSQL Data Loader - Enhanced with Failed Rows Recovery & Precise OS Error L
 Organized Directory Structure: rules/ for configs, inputs/ for data
 WITH SMART AUDIT MODE: Intelligent deduplication without exporting duplicates
 WITH PER-RULE PROGRESS TRACKING: Separate progress files for each rule
+WITH CENTRALIZED LOGGING CONFIG: Log level controlled via global_loader_config.yaml
 """
 
 import os
@@ -65,11 +66,23 @@ METADATA_COLUMNS = {
 }
 
 # ===========================
-# Configure logging - ENHANCED with OS error details AND SIMPLE COLORED OUTPUT
+# Configure logging - ENHANCED with configurable log level from global config
 # ===========================
-def setup_logging():
-    """Setup logging with timestamped log files in logs directory with simple colored console output."""
+def setup_logging(log_level: str = "INFO"):
+    """Setup logging with configurable log level from global config."""
     global LOG_DIR
+    
+    # Convert string log level to logging constant
+    level_mapping = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL
+    }
+    
+    # Get the numeric log level
+    numeric_level = level_mapping.get(log_level.upper(), logging.INFO)
     
     # Create logs directory if it doesn't exist
     try:
@@ -77,7 +90,6 @@ def setup_logging():
         print(f"\033[37mLog directory created/verified: {LOG_DIR}\033[0m")
     except OSError as e:
         print(f"\033[31mCRITICAL: Failed to create log directory {LOG_DIR}: {e}\033[0m")
-        # Fallback to current directory
         LOG_DIR = "."
         print(f"\033[33mUsing fallback log directory: {LOG_DIR}\033[0m")
     
@@ -87,23 +99,30 @@ def setup_logging():
     log_filepath = os.path.join(LOG_DIR, log_filename)
     
     try:
-        # First ensure the log file exists by writing something to it
+        # Create the log file and write initial info
         with open(log_filepath, 'a') as f:
             f.write(f"Log started at: {datetime.now().isoformat()}\n")
+            f.write(f"Log level: {log_level} ({numeric_level})\n")
         
         # Format de base pour tous les handlers
         log_format = "%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
         
-        # Créer le logger racine
+        # Clear any existing handlers (in case of reinitialization)
         root_logger = logging.getLogger()
-        root_logger.setLevel(logging.INFO)
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+        
+        # Set new level
+        root_logger.setLevel(numeric_level)
         
         # Handler pour le fichier (sans couleur)
         file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
         file_handler.setFormatter(logging.Formatter(log_format))
+        file_handler.setLevel(numeric_level)
         
         # Handler pour la console (avec couleur simple)
         console_handler = logging.StreamHandler()
+        console_handler.setLevel(numeric_level)
         
         # Fonction simple pour ajouter des couleurs
         def add_color_to_message(record):
@@ -188,14 +207,14 @@ def setup_logging():
     except Exception as e:
         print(f"\033[31mCRITICAL: Logging setup failed: {e}\033[0m")
         # Basic fallback logging
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+        logging.basicConfig(level=numeric_level, format="%(asctime)s - %(levelname)s - %(message)s")
     
     # Get logger after setup
     logger = logging.getLogger(__name__)
-    logger.info(f"Logging initialized. Log file: {log_filepath}")
+    logger.info(f"Logging initialized at level {log_level}. Log file: {log_filepath}")
     return logger
 
-# Initialize logging
+# Initialize logging with default level
 logger = setup_logging()
 
 # Enhanced OS error logging decorator
@@ -429,6 +448,9 @@ class ProcessingConfig:
 
     # NEW: Sample file control
     generate_sample_files: bool = False
+    
+    # NEW: Logging configuration
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 
     def get_db_config(self) -> Dict[str, Any]:
         """Return database configuration as a dictionary."""
@@ -1320,6 +1342,11 @@ class PostgresLoader:
         
         self.config = self._load_global_config(global_config_file)
         self.config.delete_files = delete_files.upper()
+        
+        # REINITIALIZE LOGGING WITH CONFIG LEVEL
+        global logger
+        logger = setup_logging(log_level=self.config.log_level)
+        logger.info(f"Logging reinitialized with level: {self.config.log_level}")
 
         self.processing_rules = self._load_processing_rules(rules_folder_path)
         self.db_manager = DatabaseManager(self.config.get_db_config(), self.config)
@@ -3171,7 +3198,10 @@ def create_sample_configs():
             "max_chunk_failures": 5,
 
             # NEW: Sample file control
-            "generate_sample_files": False
+            "generate_sample_files": False,
+            
+            # NEW: Logging configuration
+            "log_level": "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
         }
         with open(GLOBAL_CONFIG_FILE, 'w') as f:
             yaml.dump(global_config, f)
