@@ -87,6 +87,10 @@ def setup_logging():
     log_filepath = os.path.join(LOG_DIR, log_filename)
     
     try:
+        # First ensure the log file exists by writing something to it
+        with open(log_filepath, 'a') as f:
+            f.write(f"Log started at: {datetime.now().isoformat()}\n")
+        
         # Format de base pour tous les handlers
         log_format = "%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
         
@@ -745,7 +749,7 @@ class DatabaseManager:
                     query = sql.SQL("""
                         SELECT column_name 
                         FROM information_schema.columns 
-                        WHERE table_name = %s AND column_name = %s
+                        WHERE table_name = %s AND LOWER(column_name) = LOWER(%s)
                     """)
                     cursor.execute(query, (table_name, column_name))
                     exists = cursor.fetchone() is not None
@@ -758,25 +762,48 @@ class DatabaseManager:
     def alter_table_add_columns(self, table_name: str, new_columns: List[Dict[str, str]]) -> bool:
         """
         Alter table to add new columns based on mapping configuration.
+        Skips columns that already exist.
         """
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
+                    columns_added = 0
+                    columns_skipped = 0
+                    
                     for col_info in new_columns:
                         column_name = col_info['TargetColumn']
                         data_type = col_info['DataType']
-
-                        if not self.column_exists(table_name, column_name):
-                            alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
-                                sql.Identifier(table_name),
-                                sql.Identifier(column_name),
-                                sql.SQL(data_type)
-                            )
-                            cursor.execute(alter_query)
-                            logger.info(f"Added column {column_name} to table {table_name}")
+                        
+                        # Check if column already exists
+                        if self.column_exists(table_name, column_name):
+                            logger.debug(f"Column {column_name} already exists in table {table_name}, skipping")
+                            columns_skipped += 1
+                            continue
+                        
+                        # Also check for case-insensitive match
+                        cursor.execute("""
+                            SELECT column_name 
+                            FROM information_schema.columns 
+                            WHERE table_name = %s 
+                            AND LOWER(column_name) = LOWER(%s)
+                        """, (table_name, column_name))
+                        if cursor.fetchone() is not None:
+                            logger.debug(f"Column {column_name} already exists (case-insensitive match), skipping")
+                            columns_skipped += 1
+                            continue
+                        
+                        # Column doesn't exist, add it
+                        alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
+                            sql.Identifier(table_name),
+                            sql.Identifier(column_name),
+                            sql.SQL(data_type)
+                        )
+                        cursor.execute(alter_query)
+                        columns_added += 1
+                        logger.info(f"Added column {column_name} to table {table_name}")
 
                     conn.commit()
-                    logger.info(f"Successfully added {len(new_columns)} columns to table {table_name}")
+                    logger.info(f"Altered table {table_name}: {columns_added} columns added, {columns_skipped} columns already existed")
                     return True
         except Exception as e:
             logger.error(f"Failed to alter table {table_name}: {e}")
@@ -852,13 +879,17 @@ class HybridProgressTracker:
         self.rule_name = rule_name
         self.rules_folder = rules_folder
         
+        # Ensure rules folder exists
+        os.makedirs(self.rules_folder, exist_ok=True)
+        
         # Determine progress file name
         if rule_name:
-            self.progress_file = os.path.join(rules_folder, f"{rule_name}_progress.json")
+            self.progress_file = os.path.join(self.rules_folder, f"{rule_name}_progress.json")
         else:
-            self.progress_file = PROGRESS_FILE  # Fallback to global file
+            self.progress_file = os.path.join(self.rules_folder, PROGRESS_FILE)  # Fallback
             
         self.processed_files = self._load_progress()
+        logger.info(f"Progress tracker initialized for rule '{self.rule_name}': {self.progress_file}")
 
     @log_os_operations
     def _load_progress(self) -> dict:
@@ -1147,8 +1178,9 @@ class FileProcessor:
         if data_section.isna().all().all():
             return True
         
+        # FIXED: Use map instead of applymap
         # Check if all values are empty strings or whitespace
-        if data_section.applymap(lambda x: str(x).strip() if pd.notna(x) else '').eq('').all().all():
+        if data_section.map(lambda x: str(x).strip() if pd.notna(x) else '').eq('').all().all():
             return True
         
         return False
@@ -1249,6 +1281,7 @@ class PostgresLoader:
                     rules_folder=rules_folder_path
                 )
             logger.info(f"Created {len(self.rule_progress_trackers)} per-rule progress trackers")
+            logger.info(f"Progress files location: {rules_folder_path}")
 
         self.global_start_row = global_start_row
         self.global_start_col = global_start_col
@@ -1273,11 +1306,9 @@ class PostgresLoader:
     @log_os_operations
     def _create_directory_structure(self):
         """Create the organized directory structure with accurate logging."""
+        # Only create essential directories, not sample data directories
         directories = [
             "rules",
-            "inputs/sales_data",
-            "inputs/inventory_data", 
-            "inputs/weekly_reports",
             DUPLICATES_ROOT_DIR,
             DUPLICATES_TO_PROCESS_DIR,
             DUPLICATES_PROCESSED_DIR,
@@ -1493,10 +1524,23 @@ class PostgresLoader:
             if not mapping_filepath.exists():
                 logger.error(f"Mapping file not found for rule '{rule.base_name}': {mapping_filepath}")
                 
-                # Try to create mapping file if sample exists
-                sample_file = next(rule_source_dir.glob("*.*"), None)
+                # FIXED: Find first file matching the rule pattern, not just any file
+                sample_file = None
+                if rule.search_subdirectories:
+                    # Search recursively
+                    for file_path in rule_source_dir.rglob("*.*"):
+                        if file_path.is_file() and rule.match(file_path.name):
+                            sample_file = file_path
+                            break
+                else:
+                    # Search only in top directory
+                    for file_path in rule_source_dir.iterdir():
+                        if file_path.is_file() and rule.match(file_path.name):
+                            sample_file = file_path
+                            break
+                
                 if sample_file:
-                    logger.warning(f"Creating template mapping file from sample: {sample_file}")
+                    logger.warning(f"Creating template mapping file from matching sample: {sample_file}")
                     self._generate_mapping_file(
                         source_filepath=sample_file,
                         mapping_filepath=mapping_filepath,
@@ -1506,7 +1550,7 @@ class PostgresLoader:
                     )
                     logger.error(f"Template mapping file created. Please configure LoadFlag values in {mapping_filepath} and rerun.")
                 else:
-                    logger.error(f"No sample file found for {rule.base_name} in {rule.directory} to generate mapping template")
+                    logger.error(f"No file matching pattern '{rule.file_pattern}' found for {rule.base_name} in {rule.directory} to generate mapping template")
                 
                 # Skip this rule and continue with others
                 continue
@@ -2678,6 +2722,9 @@ class PostgresLoader:
                 logger.error(f"Mapping file not found: {mapping_filepath}. Skipping rule '{rule.target_table}'.")
                 continue
 
+            # Log detailed information about the rule
+            logger.info(f"Rule '{rule.target_table}': Searching in {rule.directory} with pattern '{rule.file_pattern}'")
+            
             # Get skip patterns from rule configuration
             skip_subdirectories = getattr(rule, 'skip_subdirectories', [])
             skip_file_patterns = getattr(rule, 'skip_file_patterns', [])
@@ -2686,8 +2733,10 @@ class PostgresLoader:
 
             if rule.search_subdirectories:
                 search_pattern = rule_source_dir.rglob('*')
+                logger.debug(f"Searching recursively in: {rule_source_dir}")
             else:
                 search_pattern = rule_source_dir.iterdir()
+                logger.debug(f"Searching non-recursively in: {rule_source_dir}")
 
             files_found = 0
             files_skipped_pattern = 0
@@ -2699,21 +2748,6 @@ class PostgresLoader:
                 if file_path.is_dir():
                     continue
 
-                # Check if file is in a skipped subdirectory
-                if skip_subdirectories:
-                    file_relative_path = file_path.relative_to(rule_source_dir)
-                    # Check if any parent directory is in the skip list
-                    skip_this_file = False
-                    for parent in file_relative_path.parents:
-                        if parent.name in skip_subdirectories:
-                            files_skipped_directory += 1
-                            logger.debug(f"Skipping file in excluded directory '{parent}': {file_path}")
-                            skip_this_file = True
-                            break
-                    
-                    if skip_this_file:
-                        continue
-
                 # Check file extension
                 if file_path.suffix.lower() not in ['.csv', '.xlsx', '.xls', '.parquet', '.json']:
                     continue
@@ -2723,6 +2757,7 @@ class PostgresLoader:
                     continue
 
                 filename = file_path.name
+                logger.debug(f"Found file: {filename}")
                 
                 # Check if file matches any skip patterns
                 if skip_file_patterns:
@@ -2740,6 +2775,12 @@ class PostgresLoader:
                         continue
 
                 match = rule.match(filename)
+                
+                # DEBUG: Log matching attempt
+                if match:
+                    logger.info(f"Rule '{rule.target_table}': File '{filename}' MATCHED pattern '{rule.file_pattern}'")
+                else:
+                    logger.debug(f"Rule '{rule.target_table}': File '{filename}' did not match pattern '{rule.file_pattern}'")
 
                 # STRICT PATTERN MATCHING: Only include files that match the pattern
                 if match:
@@ -2770,10 +2811,8 @@ class PostgresLoader:
                         sheet_config=rule.sheet_config
                     )
                     all_potential_file_contexts.append(file_context)
-                    logger.info(f"Rule '{rule.target_table}': File '{filename}' MATCHED pattern '{rule.file_pattern}'")
                 else:
                     files_skipped_pattern += 1
-                    logger.debug(f"Rule '{rule.target_table}': Skipping file '{filename}' - does not match pattern '{rule.file_pattern}'")
             
             logger.info(f"Rule '{rule.target_table}': found {files_found} matching files, "
                        f"skipped {files_skipped_pattern} non-matching files, "
@@ -3006,7 +3045,7 @@ def create_sample_configs():
     """Create sample configuration files with organized directory structure and enhanced logging."""
     logger.info("Creating sample configuration files...")
     
-    # Create organized directory structure
+    # Create organized directory structure including sample directories
     directories = [
         "rules",
         "inputs/sales_data", 
@@ -3266,4 +3305,3 @@ if __name__ == "__main__":
         # Ensure cleanup happens even if there's an unhandled exception
         if loader:
             loader.cleanup()
-            
