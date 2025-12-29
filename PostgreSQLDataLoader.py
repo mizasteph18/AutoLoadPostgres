@@ -1580,11 +1580,12 @@ class PostgresLoader:
         for rule in self.processing_rules:
             rule_source_dir = Path(rule.directory)
             if not rule_source_dir.exists():
-                try:
-                    rule_source_dir.mkdir(parents=True, exist_ok=True)
-                    logger.info(f"Created directory: {rule_source_dir}")
-                except OSError as e:
-                    logger.error(f"Failed to create directory {rule_source_dir}: {e}")
+                # FIXED: Do NOT create the directory - log error and block the rule
+                logger.error(f"Source directory not found for rule '{rule.base_name}': {rule_source_dir}. Skipping rule.")
+                # Block the rule
+                self.blocked_rules[rule.base_name] = f"Source directory not found: {rule_source_dir}"
+                logger.error(f"RULE BLOCKED: {rule.base_name} - Source directory not found: {rule_source_dir}")
+                continue
 
             mapping_filepath = Path(rule.mapping_file)
 
@@ -3137,16 +3138,6 @@ def create_sample_configs():
             logger.debug(f"Created directory: {directory}")
         except OSError as e:
             logger.error(f"Failed to create directory {directory}: {e} (errno: {e.errno})")
-
-    # Create only the input directories that might be referenced in rules
-    # but don't populate them with sample files
-    input_dirs = ["inputs", "inputs/sales_data", "inputs/inventory_data", "inputs/weekly_reports"]
-    for directory in input_dirs:
-        try:
-            os.makedirs(directory, exist_ok=True)
-            logger.debug(f"Created input directory: {directory}")
-        except OSError as e:
-            logger.debug(f"Input directory already exists or could not be created: {directory} - {e}")
 
     if not os.path.exists(GLOBAL_CONFIG_FILE):
         global_config = {
