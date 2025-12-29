@@ -146,15 +146,44 @@ def setup_logging():
         # Désactiver la propagation
         root_logger.propagate = False
         
-        # Also create a symlink to the latest log for easy access
+        # Also create a symlink or copy to the latest log for easy access
         latest_log_path = os.path.join(LOG_DIR, "processing_latest.log")
-        try:
-            if os.path.exists(latest_log_path):
-                os.remove(latest_log_path)
-            os.symlink(log_filepath, latest_log_path)
-            print(f"\033[37mCreated latest log symlink: {latest_log_path} -> {log_filepath}\033[0m")
-        except OSError as e:
-            print(f"\033[33mCould not create latest log symlink: {e} (errno: {e.errno})\033[0m")
+        
+        # Platform-specific handling
+        if sys.platform == "win32":
+            # Windows: Use copy instead of symlink
+            try:
+                if os.path.exists(latest_log_path):
+                    os.remove(latest_log_path)
+                shutil.copy2(log_filepath, latest_log_path)
+                print(f"\033[37mCreated latest log copy: {latest_log_path}\033[0m")
+            except OSError as e:
+                print(f"\033[33mCould not create latest log copy on Windows: {e}\033[0m")
+                # Create a simple text file with the path instead
+                try:
+                    with open(os.path.join(LOG_DIR, "latest_log.txt"), 'w') as f:
+                        f.write(log_filepath)
+                    print(f"\033[37mCreated latest log reference file: {os.path.join(LOG_DIR, 'latest_log.txt')}\033[0m")
+                except:
+                    pass
+        else:
+            # Unix/Linux: Try symlink
+            try:
+                if os.path.exists(latest_log_path):
+                    if os.path.islink(latest_log_path):
+                        os.unlink(latest_log_path)
+                    else:
+                        os.remove(latest_log_path)
+                os.symlink(os.path.basename(log_filepath), latest_log_path)
+                print(f"\033[37mCreated latest log symlink: {latest_log_path} -> {os.path.basename(log_filepath)}\033[0m")
+            except (OSError, AttributeError) as e:
+                print(f"\033[33mCould not create latest log symlink: {e}\033[0m")
+                # Fallback to copy
+                try:
+                    shutil.copy2(log_filepath, latest_log_path)
+                    print(f"\033[37mCreated latest log copy as fallback: {latest_log_path}\033[0m")
+                except:
+                    pass
             
     except Exception as e:
         print(f"\033[31mCRITICAL: Logging setup failed: {e}\033[0m")
@@ -879,8 +908,16 @@ class HybridProgressTracker:
         self.rule_name = rule_name
         self.rules_folder = rules_folder
         
-        # Ensure rules folder exists
-        os.makedirs(self.rules_folder, exist_ok=True)
+        # FIXED: Use absolute path for rules folder
+        try:
+            abs_rules_folder = os.path.abspath(rules_folder)
+            os.makedirs(abs_rules_folder, exist_ok=True)
+            self.rules_folder = abs_rules_folder
+            logger.debug(f"Progress tracker using absolute rules folder: {self.rules_folder}")
+        except OSError as e:
+            logger.error(f"Failed to create rules folder {rules_folder}: {e}")
+            # Fallback to current directory
+            self.rules_folder = os.path.abspath(".")
         
         # Determine progress file name
         if rule_name:
@@ -889,7 +926,11 @@ class HybridProgressTracker:
             self.progress_file = os.path.join(self.rules_folder, PROGRESS_FILE)  # Fallback
             
         self.processed_files = self._load_progress()
-        logger.info(f"Progress tracker initialized for rule '{self.rule_name}': {self.progress_file}")
+        
+        # DEBUG: Log the actual path being used
+        logger.info(f"Progress tracker initialized for rule '{self.rule_name}': {os.path.abspath(self.progress_file)}")
+        logger.info(f"  Rules folder: {self.rules_folder}")
+        logger.info(f"  Progress file exists: {os.path.exists(self.progress_file)}")
 
     @log_os_operations
     def _load_progress(self) -> dict:
@@ -913,13 +954,24 @@ class HybridProgressTracker:
     def save_progress(self) -> None:
         try:
             # Ensure rules folder exists
-            os.makedirs(self.rules_folder, exist_ok=True)
+            os.makedirs(os.path.dirname(self.progress_file), exist_ok=True)
             
             with open(self.progress_file, 'w') as f:
                 json.dump(self.processed_files, f, indent=2)
             logger.debug(f"Progress saved for rule '{self.rule_name}': {self.progress_file} ({len(self.processed_files)} files)")
         except Exception as e:
             logger.error(f"Could not save progress to {self.progress_file}: {e}")
+            # Try to save in current directory as fallback
+            try:
+                if self.rule_name:
+                    fallback_file = f"{self.rule_name}_progress.json"
+                else:
+                    fallback_file = PROGRESS_FILE
+                with open(fallback_file, 'w') as f:
+                    json.dump(self.processed_files, f, indent=2)
+                logger.warning(f"Saved progress to fallback location: {fallback_file}")
+            except Exception as e2:
+                logger.error(f"Could not save progress anywhere: {e2}")
 
     def get_tracking_key(self, filepath: Path, file_context: FileContext) -> str:
         # Include sheet name in tracking key for multi-sheet Excel files
@@ -967,6 +1019,8 @@ class HybridProgressTracker:
             return False
 
         tracking_key = self.get_tracking_key(filepath, file_context)
+        logger.debug(f"Checking if file needs processing: {tracking_key}")
+        
         current_mod_time = datetime.fromtimestamp(filepath.stat().st_mtime)
         stored_info = self.processed_files.get(tracking_key)
 
@@ -1272,17 +1326,6 @@ class PostgresLoader:
         self.validator = DataValidator(self.config)
         self.file_processor = FileProcessor(self.config)
         
-        # ENHANCED: Create per-rule progress trackers
-        self.rule_progress_trackers = {}
-        if self.config.enable_progress_tracking:
-            for rule in self.processing_rules:
-                self.rule_progress_trackers[rule.base_name] = HybridProgressTracker(
-                    rule_name=rule.base_name,
-                    rules_folder=rules_folder_path
-                )
-            logger.info(f"Created {len(self.rule_progress_trackers)} per-rule progress trackers")
-            logger.info(f"Progress files location: {rules_folder_path}")
-
         self.global_start_row = global_start_row
         self.global_start_col = global_start_col
         self.delete_files = delete_files.upper() == "Y"
@@ -1301,7 +1344,28 @@ class PostgresLoader:
         if not self._acquire_lock():
             sys.exit(1)
 
+        # Validate setup - this may filter/block rules
         self._validate_setup()
+
+        # ===================================================
+        # FIXED: Create per-rule progress trackers AFTER setup validation
+        # ===================================================
+        self.rule_progress_trackers = {}
+        if self.config.enable_progress_tracking:
+            # Only create trackers for rules that passed validation
+            for rule in self.processing_rules:
+                if rule.base_name not in self.blocked_rules:  # Skip blocked rules
+                    tracker = HybridProgressTracker(
+                        rule_name=rule.base_name,
+                        rules_folder=rules_folder_path
+                    )
+                    self.rule_progress_trackers[rule.base_name] = tracker
+                    logger.info(f"Created progress tracker for rule '{rule.base_name}': {tracker.progress_file}")
+            
+            logger.info(f"Created {len(self.rule_progress_trackers)} per-rule progress trackers")
+            logger.info(f"Progress files location: {os.path.abspath(rules_folder_path)}")
+        else:
+            logger.info("Progress tracking is disabled in configuration")
 
     @log_os_operations
     def _create_directory_structure(self):
@@ -1451,7 +1515,10 @@ class PostgresLoader:
     # ---------------------------
     def _get_progress_tracker_for_rule(self, rule_name: str) -> Optional[HybridProgressTracker]:
         """Get progress tracker for a specific rule."""
-        return self.rule_progress_trackers.get(rule_name)
+        tracker = self.rule_progress_trackers.get(rule_name)
+        if tracker is None:
+            logger.warning(f"No progress tracker found for rule '{rule_name}'. Available trackers: {list(self.rule_progress_trackers.keys())}")
+        return tracker
 
     # ---------------------------
     # Column name sanitization & type inference
@@ -1575,6 +1642,7 @@ class PostgresLoader:
                     )
                     # Block the rule
                     self.blocked_rules[rule.base_name] = f"Unconfigured LoadFlags in mapping file: {unconfigured_names}"
+                    logger.error(f"RULE BLOCKED: {rule.base_name} - Unconfigured LoadFlags: {unconfigured_names}")
                     continue  # Skip this rule
                 
                 # If mapping is valid, create table and add to valid rules
@@ -1705,7 +1773,7 @@ class PostgresLoader:
                 pd_type = dtypes.get(col, 'object')
                 sample_value = sample_values.get(col)
                 sql_type = self._infer_postgres_type(pd_type, sample_value)
-                load_flag = 'Y'  # Default to 'Y' for new columns
+                load_flag = ''  # CHANGED: Empty string to require human configuration
                 index_column = 'N'
                 if any(pattern in col.lower() for pattern in ['id', 'key', 'code', 'num']):
                     index_column = 'Y'
@@ -1713,7 +1781,7 @@ class PostgresLoader:
                     'RawColumn': col,
                     'TargetColumn': self._sanitize_column_name(col),
                     'DataType': sql_type,
-                    'LoadFlag': load_flag,
+                    'LoadFlag': load_flag,  # Empty to force user configuration
                     'IndexColumn': index_column,
                     'data_source': 'file',
                     'definition': '',
@@ -2891,6 +2959,7 @@ class PostgresLoader:
         skipped_files = 0
         
         logger.info(f"Found {len(all_potential_file_contexts)} total potential files, applying filters...")
+        logger.info(f"Progress tracking status: Enabled={self.config.enable_progress_tracking}, Trackers={list(self.rule_progress_trackers.keys())}")
 
         for fc in all_potential_file_contexts:
             # Special processing files always get processed
@@ -2911,6 +2980,8 @@ class PostgresLoader:
                         logger.info(f"SMART AUDIT (Rule '{fc.target_table}'): Skipping unchanged file: {fc.filename}")
                         skipped_files += 1
                         continue
+                else:
+                    logger.warning(f"No progress tracker for rule {fc.target_table}, processing file anyway")
             elif fc.mode == "audit":
                 try:
                     if self.db_manager.file_exists_in_db(fc.target_table, fc.file_modified_timestamp, fc.filename):
@@ -3042,15 +3113,12 @@ class PostgresLoader:
 # ===========================
 @log_os_operations
 def create_sample_configs():
-    """Create sample configuration files with organized directory structure and enhanced logging."""
-    logger.info("Creating sample configuration files...")
+    """Create sample configuration files ONLY, not sample data files."""
+    logger.info("Creating sample configuration files ONLY...")
     
-    # Create organized directory structure including sample directories
+    # Create only essential directories, not sample data directories
     directories = [
         "rules",
-        "inputs/sales_data", 
-        "inputs/inventory_data",
-        "inputs/weekly_reports",
         DUPLICATES_ROOT_DIR,
         DUPLICATES_TO_PROCESS_DIR,
         DUPLICATES_PROCESSED_DIR,
@@ -3069,6 +3137,16 @@ def create_sample_configs():
             logger.debug(f"Created directory: {directory}")
         except OSError as e:
             logger.error(f"Failed to create directory {directory}: {e} (errno: {e.errno})")
+
+    # Create only the input directories that might be referenced in rules
+    # but don't populate them with sample files
+    input_dirs = ["inputs", "inputs/sales_data", "inputs/inventory_data", "inputs/weekly_reports"]
+    for directory in input_dirs:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            logger.debug(f"Created input directory: {directory}")
+        except OSError as e:
+            logger.debug(f"Input directory already exists or could not be created: {directory} - {e}")
 
     if not os.path.exists(GLOBAL_CONFIG_FILE):
         global_config = {
@@ -3174,52 +3252,6 @@ def create_sample_configs():
         else:
             print(f"\033[33mRule file already exists: {rule_path}\033[0m")
 
-    today = datetime.today()
-    dates = [today - pd.Timedelta(days=7 * i) for i in range(4)]
-    for dt in dates:
-        date_str = dt.strftime("%Y%m%d")
-        
-        # Sales data (CSV)
-        sample_sales_file = Path("inputs/sales_data") / f"sales_{date_str}.csv"
-        if not sample_sales_file.exists():
-            pd.DataFrame({
-                "OrderID": [1, 2, 3],
-                "Customer": ["Alice", "Bob", "Charlie"],
-                "Amount": [120.5, 85.0, 42.75]
-            }).to_csv(sample_sales_file, index=False)
-            print(f"\033[37mCreated sample sales file: {sample_sales_file}\033[0m")
-
-        # Inventory data (Excel with multiple sheets)
-        sample_inventory_file = Path("inputs/inventory_data") / f"inventory_{date_str}.xlsx"
-        if not sample_inventory_file.exists():
-            with pd.ExcelWriter(sample_inventory_file, engine='openpyxl') as writer:
-                pd.DataFrame({
-                    "ItemID": [101, 102, 103],
-                    "ItemName": ["Widget", "Gadget", "Thingy"],
-                    "Stock": [50, 20, 75]
-                }).to_excel(writer, sheet_name='Sheet1', index=False)
-                pd.DataFrame({
-                    "ItemID": [201, 202, 203],
-                    "ItemName": ["Product A", "Product B", "Product C"],
-                    "Stock": [30, 40, 60]
-                }).to_excel(writer, sheet_name='Sheet2', index=False)
-            print(f"\033[37mCreated sample inventory file with multiple sheets: {sample_inventory_file}\033[0m")
-
-        # Weekly reports (Excel with multiple sheets)
-        sample_weekly_file = Path("inputs/weekly_reports") / f"weekly_{date_str}.xlsx"
-        if not sample_weekly_file.exists():
-            with pd.ExcelWriter(sample_weekly_file, engine='openpyxl') as writer:
-                pd.DataFrame({
-                    "WeekStart": [dt.strftime("%Y-%m-%d")],
-                    "TotalSales": [round(np.random.uniform(1000, 2000), 2)],
-                    "TotalOrders": [int(np.random.randint(20, 50))]
-                }).to_excel(writer, sheet_name='Summary', index=False)
-                pd.DataFrame({
-                    "Department": ["Sales", "Marketing", "Operations"],
-                    "WeeklyTotal": [500, 300, 400]
-                }).to_excel(writer, sheet_name='Departments', index=False)
-            print(f"\033[37mCreated sample weekly report file with multiple sheets: {sample_weekly_file}\033[0m")
-
 # ===========================
 # Enhanced main entrypoint with OS error handling
 # ===========================
@@ -3250,29 +3282,33 @@ if __name__ == "__main__":
             print("\033[33mExample: python pattern_utils.py ghy_20250505.xlsx\033[0m")
             sys.exit(1)
 
-        # NEW: Only create sample configs if explicitly enabled or first run
+        # NEW: Only create sample configs if explicitly requested or first run
         config_exists = os.path.exists(GLOBAL_CONFIG_FILE)
+        rules_exist = os.path.exists("rules") and len(list(Path("rules").glob("*_rule.yaml"))) > 0
         
-        if not config_exists:
-            # First run - create sample configs
-            print("\033[37mFirst run detected. Creating sample configuration files...\033[0m")
+        if not config_exists and not rules_exist:
+            # First run - create sample configs ONLY
+            print("\033[37mFirst run detected. Creating sample configuration files (NO sample data files)...\033[0m")
             create_sample_configs()
-            print("\033[37mSample configuration created. Please configure global_loader_config.yaml with your database settings.\033[0m")
+            print("\033[37mSample configuration created. Please configure:")
+            print("1. global_loader_config.yaml with your database settings")
+            print("2. rules/*_rule.yaml with your file patterns")
+            print("3. rules/*_mapping.csv with your column mappings\033[0m")
             sys.exit(0)
-        else:
-            # Check if sample generation is enabled in config
-            try:
-                with open(GLOBAL_CONFIG_FILE, 'r') as f:
-                    config_data = yaml.safe_load(f)
-                    generate_samples = config_data.get('generate_sample_files', False)
-                    
-                if generate_samples:
-                    print("\033[37mSample file generation is enabled. Creating/updating sample files...\033[0m")
-                    create_sample_configs()
-                else:
-                    logger.info("Sample file generation is disabled in config")
-            except Exception as e:
-                logger.warning(f"Could not read config to check sample generation setting: {e}")
+        
+        # Check if sample generation is enabled in config (for updates only)
+        try:
+            with open(GLOBAL_CONFIG_FILE, 'r') as f:
+                config_data = yaml.safe_load(f)
+                generate_samples = config_data.get('generate_sample_files', False)
+                
+            if generate_samples:
+                print("\033[37mSample file generation is enabled. Creating/updating sample files...\033[0m")
+                create_sample_configs()
+            else:
+                logger.info("Sample file generation is disabled in config")
+        except Exception as e:
+            logger.warning(f"Could not read config to check sample generation setting: {e}")
 
         loader = PostgresLoader(
             global_config_file=GLOBAL_CONFIG_FILE,
