@@ -214,17 +214,19 @@ def setup_logging(log_level: str = "INFO"):
     logger.info(f"Logging initialized at level {log_level}. Log file: {log_filepath}")
     return logger
 
-# Initialize logging with default level
+# Initialize logging with default level first
 logger = setup_logging()
 
-# Enhanced OS error logging decorator
+# Enhanced OS error logging decorator - FIXED: Use local logger
 def log_os_operations(func):
     """Decorator to add detailed OS error logging for file/directory operations."""
     def wrapper(*args, **kwargs):
         func_name = func.__name__
+        # Get logger inside the wrapper to avoid circular dependency
+        local_logger = logging.getLogger(__name__)
         try:
             result = func(*args, **kwargs)
-            logger.debug(f"OS operation successful: {func_name}")
+            local_logger.debug(f"OS operation successful: {func_name}")
             return result
         except OSError as e:
             error_details = {
@@ -237,14 +239,14 @@ def log_os_operations(func):
                 'args': str(args)[:200] + '...' if len(str(args)) > 200 else str(args),
                 'kwargs': {k: '***' if 'password' in k.lower() else v for k, v in kwargs.items()}
             }
-            logger.error(f"OS operation failed: {error_details}")
+            local_logger.error(f"OS operation failed: {error_details}")
             # Handle specific OS errors gracefully
             if e.errno == errno.EINTR:
-                logger.warning("Operation interrupted by signal, retrying...")
+                local_logger.warning("Operation interrupted by signal, retrying...")
                 return func(*args, **kwargs)
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in {func_name}: {type(e).__name__}: {e}")
+            local_logger.error(f"Unexpected error in {func_name}: {type(e).__name__}: {e}")
             raise
     return wrapper
 
