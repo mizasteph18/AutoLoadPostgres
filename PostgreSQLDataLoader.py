@@ -1339,14 +1339,16 @@ class PostgresLoader:
                  delete_files: str = "N",
                  global_config_file: str = GLOBAL_CONFIG_FILE,
                  rules_folder_path: str = "rules"):
-
+        
+        # FIXED: Declare global logger at the beginning to avoid syntax error
+        global logger
+        
         logger.info(f"Initializing PostgresLoader with config: {global_config_file}, rules: {rules_folder_path}")
         
         self.config = self._load_global_config(global_config_file)
         self.config.delete_files = delete_files.upper()
         
         # REINITIALIZE LOGGING WITH CONFIG LEVEL
-        global logger
         logger = setup_logging(log_level=self.config.log_level)
         logger.info(f"Logging reinitialized with level: {self.config.log_level}")
 
