@@ -5,6 +5,7 @@ Organized Directory Structure: rules/ for configs, inputs/ for data
 WITH SMART AUDIT MODE: Intelligent deduplication without exporting duplicates
 WITH PER-RULE PROGRESS TRACKING: Separate progress files for each rule
 WITH CENTRALIZED LOGGING CONFIG: Log level controlled via global_loader_config.yaml
+WITH SIMPLE INDEX MANAGEMENT: Single 'Index' column with codes (N/PK/IS/IU/IC_nom_ordre)
 """
 
 import os
@@ -51,6 +52,9 @@ FAILED_ROWS_PROCESSED_DIR = os.path.join(FAILED_ROWS_DIR, "processed")
 SYSTEM_COLUMNS_ORDER = ["loaded_timestamp", "source_filename", "content_hash", "operation"]
 LOCK_FILE = "loader.lock"
 LOG_DIR = "logs"
+
+# Index codes
+INDEX_CODES = {'N', 'PK', 'IS', 'IU', 'IC'}
 
 # Metadata columns injected by conflict exports (automatically removed on reprocessing)
 METADATA_COLUMNS = {
@@ -522,9 +526,9 @@ class FileProcessingRule:
         except re.error as e:
             errors.append(f"Invalid regex pattern '{self.file_pattern}': {e}")
             
-        # MODIFIED: Ajout du mode "smart_audit"
-        if self.mode and self.mode not in ["cancel_and_replace", "audit", "insert", "smart_audit"]:
-            errors.append(f"Invalid mode: {self.mode}. Must be one of: insert, audit, smart_audit, cancel_and_replace")
+        # MODIFIED: Removed "audit" from valid modes
+        if self.mode and self.mode not in ["cancel_and_replace", "insert", "smart_audit"]:
+            errors.append(f"Invalid mode: {self.mode}. Must be one of: insert, smart_audit, cancel_and_replace")
         if self.date_from_filename_col_name and not self.date_format:
             errors.append("date_format is required when date_from_filename_col_name is specified")
         
@@ -574,10 +578,10 @@ class FileContext:
     source_sheet: str = ""
 
 # ===========================
-# Enhanced Database Manager with OS logging
+# Enhanced Database Manager with OS logging and Index Management
 # ===========================
 class DatabaseManager:
-    """Handles database connections and operations with automatic table creation."""
+    """Handles database connections and operations with automatic table creation and index management."""
 
     def __init__(self, db_config: Dict[str, Any], config: ProcessingConfig):
         self.db_config = db_config
@@ -645,11 +649,14 @@ class DatabaseManager:
     def create_table_if_not_exists(self, table_name: str, mapping: pd.DataFrame) -> bool:
         """
         Create table based on mapping file if it doesn't exist.
+        Includes NOT NULL for primary key columns.
         """
         try:
             # Check if table already exists
             if self.table_exists(table_name):
                 logger.info(f"Table {table_name} already exists")
+                # Create indexes anyway (in case they're missing)
+                self.create_indexes_from_mapping(table_name, mapping)
                 return True
 
             with self.get_connection() as conn:
@@ -664,6 +671,11 @@ class DatabaseManager:
 
                     for _, row in file_columns.iterrows():
                         col_def = f"{row['TargetColumn']} {row['DataType']}"
+                        
+                        # Add NOT NULL constraint for primary key columns
+                        if pd.notna(row.get('Index')) and str(row['Index']).startswith('PK'):
+                            col_def += " NOT NULL"
+                        
                         columns_to_create.append(col_def)
 
                     # Add system columns
@@ -683,6 +695,10 @@ class DatabaseManager:
                             sql.SQL(", ".join(columns_to_create))
                         )
                         cursor.execute(create_query)
+                        
+                        # Create indexes and constraints AFTER table creation
+                        self.create_indexes_from_mapping(table_name, mapping)
+                        
                         conn.commit()
                         logger.info(f"Created table {table_name} with {len(columns_to_create)} columns")
                         return True
@@ -691,6 +707,163 @@ class DatabaseManager:
                         return False
         except Exception as e:
             logger.error(f"Failed to create table {table_name}: {e}")
+            return False
+
+    def create_indexes_from_mapping(self, table_name: str, mapping: pd.DataFrame) -> bool:
+        """
+        Create indexes and constraints based on the 'Index' column in mapping.
+        Supports: N (no index), PK (primary key), IS (simple index), IU (unique index), IC_* (composite index)
+        """
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    
+                    # 1. Process Primary Keys (PK)
+                    pk_columns = mapping[
+                        (mapping['data_source'] == 'file') &
+                        (mapping['LoadFlag'] == 'Y') &
+                        (pd.notna(mapping['Index'])) &
+                        (mapping['Index'].str.startswith('PK'))
+                    ]['TargetColumn'].tolist()
+                    
+                    if pk_columns:
+                        # Check if primary key already exists
+                        cursor.execute("""
+                            SELECT conname 
+                            FROM pg_constraint 
+                            WHERE conrelid = %s::regclass 
+                            AND contype = 'p'
+                        """, (table_name,))
+                        
+                        if not cursor.fetchone():
+                            # For single column PK
+                            if len(pk_columns) == 1:
+                                cursor.execute(f"""
+                                    ALTER TABLE "{table_name}" 
+                                    ADD CONSTRAINT pk_{table_name} 
+                                    PRIMARY KEY ("{pk_columns[0]}")
+                                """)
+                                logger.info(f"Created primary key on {table_name}.{pk_columns[0]}")
+                            # For composite PK
+                            else:
+                                columns_str = ', '.join([f'"{col}"' for col in pk_columns])
+                                cursor.execute(f"""
+                                    ALTER TABLE "{table_name}" 
+                                    ADD CONSTRAINT pk_{table_name} 
+                                    PRIMARY KEY ({columns_str})
+                                """)
+                                logger.info(f"Created composite primary key on {table_name}: {columns_str}")
+                    
+                    # 2. Process Unique Indexes (IU)
+                    iu_columns = mapping[
+                        (mapping['data_source'] == 'file') &
+                        (mapping['LoadFlag'] == 'Y') &
+                        (pd.notna(mapping['Index'])) &
+                        (mapping['Index'] == 'IU')
+                    ]['TargetColumn'].tolist()
+                    
+                    for col in iu_columns:
+                        constraint_name = f"uq_{table_name}_{col}"
+                        
+                        # Check if constraint already exists
+                        cursor.execute("""
+                            SELECT conname 
+                            FROM pg_constraint 
+                            WHERE conrelid = %s::regclass 
+                            AND conname = %s
+                        """, (table_name, constraint_name))
+                        
+                        if not cursor.fetchone():
+                            cursor.execute(f"""
+                                ALTER TABLE "{table_name}" 
+                                ADD CONSTRAINT "{constraint_name}" 
+                                UNIQUE ("{col}")
+                            """)
+                            logger.info(f"Created unique constraint on {table_name}.{col}")
+                    
+                    # 3. Process Simple Indexes (IS)
+                    is_columns = mapping[
+                        (mapping['data_source'] == 'file') &
+                        (mapping['LoadFlag'] == 'Y') &
+                        (pd.notna(mapping['Index'])) &
+                        (mapping['Index'] == 'IS')
+                    ]['TargetColumn'].tolist()
+                    
+                    for col in is_columns:
+                        index_name = f"idx_{table_name}_{col}"
+                        
+                        # Check if index already exists
+                        cursor.execute("""
+                            SELECT indexname 
+                            FROM pg_indexes 
+                            WHERE tablename = %s 
+                            AND indexname = %s
+                        """, (table_name, index_name))
+                        
+                        if not cursor.fetchone():
+                            cursor.execute(f'CREATE INDEX "{index_name}" ON "{table_name}" ("{col}")')
+                            logger.info(f"Created simple index on {table_name}.{col}")
+                    
+                    # 4. Process Composite Indexes (IC_groupname_order)
+                    ic_rows = mapping[
+                        (mapping['data_source'] == 'file') &
+                        (mapping['LoadFlag'] == 'Y') &
+                        (pd.notna(mapping['Index'])) &
+                        (mapping['Index'].str.startswith('IC_'))
+                    ].copy()
+                    
+                    if not ic_rows.empty:
+                        # Extract group name and order from Index column
+                        # Format: IC_groupname_order (e.g., IC_customer_date_1, IC_customer_date_2)
+                        def extract_ic_info(index_value):
+                            """Extract group name and order from IC_* format."""
+                            try:
+                                # Remove IC_ prefix
+                                without_prefix = index_value[3:]  # Remove "IC_"
+                                # Split by last underscore to separate order
+                                if '_' in without_prefix:
+                                    parts = without_prefix.rsplit('_', 1)
+                                    if len(parts) == 2 and parts[1].isdigit():
+                                        return parts[0], int(parts[1])  # groupname, order
+                                return None, None
+                            except:
+                                return None, None
+                        
+                        ic_rows[['ic_group', 'ic_order']] = ic_rows['Index'].apply(
+                            lambda x: pd.Series(extract_ic_info(x))
+                        )
+                        
+                        # Remove rows where extraction failed
+                        ic_rows = ic_rows[ic_rows['ic_group'].notna() & ic_rows['ic_order'].notna()]
+                        
+                        # Group by composite index group
+                        for group_name, group in ic_rows.groupby('ic_group'):
+                            # Sort by order
+                            group = group.sort_values('ic_order')
+                            cols = group['TargetColumn'].tolist()
+                            
+                            if len(cols) >= 2:
+                                index_name = f"idx_{table_name}_{group_name}"
+                                
+                                # Check if index already exists
+                                cursor.execute("""
+                                    SELECT indexname 
+                                    FROM pg_indexes 
+                                    WHERE tablename = %s 
+                                    AND indexname = %s
+                                """, (table_name, index_name))
+                                
+                                if not cursor.fetchone():
+                                    cols_str = ', '.join([f'"{col}"' for col in cols])
+                                    cursor.execute(f'CREATE INDEX "{index_name}" ON "{table_name}" ({cols_str})')
+                                    logger.info(f"Created composite index on {table_name}: {cols_str}")
+                    
+                    conn.commit()
+                    logger.info(f"Index creation completed for {table_name}")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"Failed to create indexes for {table_name}: {e}")
             return False
 
     def get_latest_timestamp_for_filename(self, target_table: str, source_filename: str) -> Optional[datetime]:
@@ -1339,16 +1512,14 @@ class PostgresLoader:
                  delete_files: str = "N",
                  global_config_file: str = GLOBAL_CONFIG_FILE,
                  rules_folder_path: str = "rules"):
-        
-        # FIXED: Declare global logger at the beginning to avoid syntax error
-        global logger
-        
+
         logger.info(f"Initializing PostgresLoader with config: {global_config_file}, rules: {rules_folder_path}")
         
         self.config = self._load_global_config(global_config_file)
         self.config.delete_files = delete_files.upper()
         
         # REINITIALIZE LOGGING WITH CONFIG LEVEL
+        global logger
         logger = setup_logging(log_level=self.config.log_level)
         logger.info(f"Logging reinitialized with level: {self.config.log_level}")
 
@@ -1677,6 +1848,28 @@ class PostgresLoader:
                     logger.error(f"RULE BLOCKED: {rule.base_name} - Unconfigured LoadFlags: {unconfigured_names}")
                     continue  # Skip this rule
                 
+                # Validate Index column values
+                if 'Index' in mapping.columns:
+                    invalid_index_values = mapping[
+                        (mapping['data_source'] == 'file') &
+                        (mapping['LoadFlag'] == 'Y') &
+                        (mapping['Index'].notna()) &
+                        (~mapping['Index'].isin(INDEX_CODES)) &
+                        (~mapping['Index'].str.startswith('IC_'))
+                    ]
+                    
+                    if not invalid_index_values.empty:
+                        invalid_names = invalid_index_values['RawColumn'].tolist()
+                        invalid_values = invalid_index_values['Index'].tolist()
+                        logger.error(
+                            f"Rule '{rule.base_name}': Invalid Index values: {list(zip(invalid_names, invalid_values))}. "
+                            f"Valid values are: N, PK, IS, IU, or IC_nom_ordre (e.g., IC_customer_date_1)"
+                        )
+                        # Block the rule
+                        self.blocked_rules[rule.base_name] = f"Invalid Index values: {list(zip(invalid_names, invalid_values))}"
+                        logger.error(f"RULE BLOCKED: {rule.base_name} - Invalid Index values")
+                        continue
+                
                 # If mapping is valid, create table and add to valid rules
                 table_created = self.db_manager.create_table_if_not_exists(rule.target_table, mapping)
                 if not table_created:
@@ -1788,7 +1981,7 @@ class PostgresLoader:
                 logger.warning("No data found in sample file after applying start_row and start_col")
                 # Create empty mapping file with correct structure
                 pd.DataFrame(columns=[
-                    'RawColumn', 'TargetColumn', 'DataType', 'LoadFlag', 'IndexColumn',
+                    'RawColumn', 'TargetColumn', 'DataType', 'LoadFlag', 'Index',
                     'data_source', 'definition', 'order'
                 ]).to_csv(mapping_filepath, index=False)
                 return
@@ -1806,15 +1999,14 @@ class PostgresLoader:
                 sample_value = sample_values.get(col)
                 sql_type = self._infer_postgres_type(pd_type, sample_value)
                 load_flag = ''  # CHANGED: Empty string to require human configuration
-                index_column = 'N'
-                if any(pattern in col.lower() for pattern in ['id', 'key', 'code', 'num']):
-                    index_column = 'Y'
+                index_flag = 'N'  # Default: no index
+                
                 mapping_data.append({
                     'RawColumn': col,
                     'TargetColumn': self._sanitize_column_name(col),
                     'DataType': sql_type,
                     'LoadFlag': load_flag,  # Empty to force user configuration
-                    'IndexColumn': index_column,
+                    'Index': index_flag,  # N by default
                     'data_source': 'file',
                     'definition': '',
                     'order': i
@@ -1827,13 +2019,13 @@ class PostgresLoader:
                 ('operation', 'TEXT', 'Y', 'N')
             ]
 
-            for col_name, col_type, load_flag, index_column in system_columns:
+            for col_name, col_type, load_flag, index_flag in system_columns:
                 mapping_data.append({
                     'RawColumn': col_name,
                     'TargetColumn': col_name,
                     'DataType': col_type,
                     'LoadFlag': load_flag,
-                    'IndexColumn': index_column,
+                    'Index': index_flag,
                     'data_source': 'system',
                     'definition': '',
                     'order': -1
@@ -1856,12 +2048,18 @@ class PostgresLoader:
             mapping_filepath.parent.mkdir(parents=True, exist_ok=True)
             mapping_df.to_csv(mapping_filepath, index=False)
             logger.info(f"Created mapping file with {len(columns)} file columns: {mapping_filepath}")
+            logger.info(f"Note: Index column set to 'N' by default. Please configure as needed:")
+            logger.info(f"  - N: No index")
+            logger.info(f"  - PK: Primary Key")
+            logger.info(f"  - IS: Simple Index")
+            logger.info(f"  - IU: Unique Index")
+            logger.info(f"  - IC_nom_ordre: Composite Index (e.g., IC_customer_date_1, IC_customer_date_2)")
             
         except Exception as e:
             logger.error(f"Mapping generation failed for {source_filepath}: {e}")
             # Create empty mapping file as fallback
             pd.DataFrame(columns=[
-                'RawColumn', 'TargetColumn', 'DataType', 'LoadFlag', 'IndexColumn',
+                'RawColumn', 'TargetColumn', 'DataType', 'LoadFlag', 'Index',
                 'data_source', 'definition', 'order'
             ]).to_csv(mapping_filepath, index=False)
 
@@ -1899,7 +2097,7 @@ class PostgresLoader:
                 'TargetColumn': self._sanitize_column_name(col),
                 'DataType': 'TEXT',
                 'LoadFlag': '',  # Leave empty to force user configuration
-                'IndexColumn': 'N',
+                'Index': 'N',  # Default: no index
                 'data_source': 'file',
                 'definition': f'NEW COLUMN DETECTED - Please set LoadFlag to Y or N',
                 'order': col_positions[col]
@@ -2447,10 +2645,6 @@ class PostgresLoader:
                 logger.info(f"Processing with SMART AUDIT mode: {file_context.filename}")
                 return self._process_smart_audit(file_context)
                 
-            elif file_context.mode == "audit":
-                logger.info(f"Processing with CLASSIC AUDIT mode: {file_context.filename}")
-                return self._process_classic_audit(file_context)
-                
             elif file_context.mode == "cancel_and_replace":
                 logger.info(f"Processing with CANCEL AND REPLACE mode: {file_context.filename}")
                 return self._process_cancel_and_replace(file_context)
@@ -2593,41 +2787,23 @@ class PostgresLoader:
             logger.error(f"SMART AUDIT (Rule '{file_context.target_table}'): Load failed for {file_context.filename}: {e}", exc_info=True)
             return False
     
-    def _process_classic_audit(self, file_context: FileContext) -> bool:
-        """
-        CLASSIC AUDIT MODE (original behavior - kept for compatibility):
-        1. Check if file exists in database with similar timestamp
-        2. If yes → skip completely
-        3. If no → process as normal insert
-        """
-        logger.info(f"=== CLASSIC AUDIT: Processing {file_context.filename} ===")
-        
-        # Check if file exists in database (timestamp-based check)
-        try:
-            if self.db_manager.file_exists_in_db(
-                file_context.target_table, 
-                file_context.file_modified_timestamp, 
-                file_context.filename
-            ):
-                logger.info(f"CLASSIC AUDIT (Rule '{file_context.target_table}'): Skipping {file_context.filename} (already processed with similar timestamp)")
-                # Still mark as processed in progress tracker
-                tracker = self._get_progress_tracker_for_rule(file_context.target_table)
-                if tracker:
-                    tracker.mark_processed(file_context.filepath, file_context)
-                return True  # File already processed = success
-        except Exception as e:
-            logger.error(f"CLASSIC AUDIT (Rule '{file_context.target_table}'): Audit check failed for {file_context.filename}: {e}")
-        
-        # If not processed, proceed with normal insert mode
-        return self._process_insert(file_context)
-    
     def _process_cancel_and_replace(self, file_context: FileContext) -> bool:
         """
         CANCEL AND REPLACE MODE:
-        1. Delete all rows with this source_filename
-        2. Process file as normal insert
+        1. Check if file has changed (binary hash comparison)
+        2. If unchanged → skip completely (no processing)
+        3. If changed → Delete all rows with this source_filename
+        4. Process file as normal insert
         """
         logger.info(f"=== CANCEL AND REPLACE: Processing {file_context.filename} ===")
+        
+        # 1. Check if file needs processing (binary hash comparison)
+        tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+        if tracker:
+            needs_processing = tracker.needs_processing(file_context.filepath, file_context)
+            if not needs_processing:
+                logger.info(f"CANCEL AND REPLACE (Rule '{file_context.target_table}'): File unchanged: {file_context.filename}")
+                return True  # File unchanged = success (nothing to do)
         
         # Delete existing rows for this filename
         try:
@@ -2647,11 +2823,21 @@ class PostgresLoader:
     def _process_insert(self, file_context: FileContext) -> bool:
         """
         INSERT MODE (normal processing):
-        1. Load and process file
-        2. Detect duplicates and export them to duplicates/ folder
-        3. Insert only new rows
+        1. Check if file has changed (binary hash comparison)
+        2. If unchanged → skip completely (no processing)
+        3. If changed → Load and process file
+        4. Detect duplicates and export them to duplicates/ folder
+        5. Insert only new rows
         """
         logger.info(f"=== INSERT: Processing {file_context.filename} ===")
+        
+        # 1. Check if file needs processing (binary hash comparison)
+        tracker = self._get_progress_tracker_for_rule(file_context.target_table)
+        if tracker:
+            needs_processing = tracker.needs_processing(file_context.filepath, file_context)
+            if not needs_processing:
+                logger.info(f"INSERT (Rule '{file_context.target_table}'): File unchanged: {file_context.filename}")
+                return True  # File unchanged = success (nothing to do)
         
         # Load the file
         df = self.file_processor.load_file(
@@ -3003,35 +3189,16 @@ class PostgresLoader:
             # Get tracker for this rule
             tracker = self._get_progress_tracker_for_rule(fc.target_table)
             
-            # For smart_audit mode, we rely on progress_tracker for file-level deduplication
-            # For classic audit mode, we do the database check
-            if fc.mode == "smart_audit":
-                if tracker:
-                    needs_processing = tracker.needs_processing(fc.filepath, fc)
-                    if not needs_processing:
-                        logger.info(f"SMART AUDIT (Rule '{fc.target_table}'): Skipping unchanged file: {fc.filename}")
-                        skipped_files += 1
-                        continue
-                else:
-                    logger.warning(f"No progress tracker for rule {fc.target_table}, processing file anyway")
-            elif fc.mode == "audit":
-                try:
-                    if self.db_manager.file_exists_in_db(fc.target_table, fc.file_modified_timestamp, fc.filename):
-                        logger.info(f"CLASSIC AUDIT (Rule '{fc.target_table}'): Skipping {fc.filename}: Already processed")
-                        if tracker:
-                            tracker.mark_processed(fc.filepath, fc)
-                        skipped_files += 1
-                        continue
-                except Exception as e:
-                    logger.error(f"Audit check failed for {fc.filename}: {e}")
+            # For all modes, we now check file hash before processing
+            if tracker:
+                needs_processing = tracker.needs_processing(fc.filepath, fc)
+                if not needs_processing:
+                    mode_display = fc.mode.upper() if fc.mode else "INSERT"
+                    logger.info(f"{mode_display} (Rule '{fc.target_table}'): Skipping unchanged file: {fc.filename}")
+                    skipped_files += 1
+                    continue
             else:
-                # For insert and cancel_and_replace modes, use progress tracker if enabled
-                if tracker:
-                    needs_processing = tracker.needs_processing(fc.filepath, fc)
-                    if not needs_processing:
-                        logger.info(f"INSERT/CANCEL (Rule '{fc.target_table}'): Skipping unchanged file: {fc.filename}")
-                        skipped_files += 1
-                        continue
+                logger.warning(f"No progress tracker for rule {fc.target_table}, processing file anyway")
 
             files_to_process.append(fc)
 
@@ -3318,7 +3485,8 @@ if __name__ == "__main__":
             print("\033[37mSample configuration created. Please configure:")
             print("1. global_loader_config.yaml with your database settings")
             print("2. rules/*_rule.yaml with your file patterns")
-            print("3. rules/*_mapping.csv with your column mappings\033[0m")
+            print("3. rules/*_mapping.csv with your column mappings")
+            print("   Note: Index column accepts: N (no index), PK (primary key), IS (simple index), IU (unique index), IC_nom_ordre (composite index)\033[0m")
             sys.exit(0)
         
         # Check if sample generation is enabled in config (for updates only)
