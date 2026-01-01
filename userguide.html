@@ -4,6 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PostgreSQL Data Loader - Complete User Guide</title>
+    <!-- Mermaid.js for diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#007348',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#00925b',
+                lineColor: '#009c6d',
+                secondaryColor: '#8dc9ab',
+                tertiaryColor: '#00a678',
+                fontFamily: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif',
+                fontSize: '14px'
+            }
+        });
+    </script>
     <style>
         * {
             margin: 0;
@@ -29,14 +47,14 @@
         }
         
         h1 {
-            color: #2c3e50;
-            border-bottom: 3px solid #3498db;
+            color: #007348;
+            border-bottom: 3px solid #00925b;
             padding-bottom: 15px;
             margin-bottom: 30px;
         }
         
         h2 {
-            color: #2980b9;
+            color: #009c6d;
             margin-top: 40px;
             margin-bottom: 20px;
             padding-bottom: 10px;
@@ -44,20 +62,20 @@
         }
         
         h3 {
-            color: #34495e;
+            color: #00a678;
             margin-top: 25px;
             margin-bottom: 15px;
         }
         
         h4 {
-            color: #2c3e50;
+            color: #007348;
             margin-top: 20px;
             margin-bottom: 10px;
         }
         
         .toc {
             background-color: #f8f9fa;
-            border-left: 4px solid #3498db;
+            border-left: 4px solid #00925b;
             padding: 25px;
             margin: 25px 0;
             border-radius: 5px;
@@ -76,19 +94,19 @@
         
         .toc li:before {
             content: "•";
-            color: #3498db;
+            color: #00925b;
             position: absolute;
             left: 0;
         }
         
         .toc a {
-            color: #2980b9;
+            color: #00925b;
             text-decoration: none;
             transition: color 0.3s;
         }
         
         .toc a:hover {
-            color: #1a5276;
+            color: #007348;
             text-decoration: underline;
         }
         
@@ -101,7 +119,7 @@
         }
         
         .parameter-table thead tr {
-            background-color: #3498db;
+            background-color: #00925b;
             color: white;
             text-align: left;
         }
@@ -136,6 +154,26 @@
             font-size: 14px;
             line-height: 1.4;
             white-space: pre-wrap;
+            position: relative;
+            border: 1px solid #34495e;
+        }
+        
+        .code-block .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: #00925b;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.3s;
+        }
+        
+        .code-block .copy-btn:hover {
+            background-color: #007348;
         }
         
         .yaml-block {
@@ -149,6 +187,26 @@
             font-size: 14px;
             line-height: 1.4;
             white-space: pre-wrap;
+            position: relative;
+            border: 1px solid #333;
+        }
+        
+        .yaml-block .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: #00925b;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.3s;
+        }
+        
+        .yaml-block .copy-btn:hover {
+            background-color: #007348;
         }
         
         .bash-block {
@@ -160,6 +218,26 @@
             font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
             overflow-x: auto;
             white-space: pre-wrap;
+            position: relative;
+            border: 1px solid #444;
+        }
+        
+        .bash-block .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: #00925b;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.3s;
+        }
+        
+        .bash-block .copy-btn:hover {
+            background-color: #007348;
         }
         
         .mode-comparison {
@@ -198,10 +276,9 @@
             font-size: 16px;
         }
         
-        .mode-insert .mode-icon { background-color: #27ae60; }
-        .mode-cancel .mode-icon { background-color: #e74c3c; }
-        .mode-audit .mode-icon { background-color: #f39c12; }
-        .mode-smart .mode-icon { background-color: #8e44ad; }
+        .mode-insert .mode-icon { background-color: #00a678; }
+        .mode-cancel .mode-icon { background-color: #007348; }
+        .mode-smart .mode-icon { background-color: #00925b; }
         
         .mode-title {
             font-size: 18px;
@@ -218,11 +295,11 @@
             margin: 5px 5px 5px 0;
         }
         
-        .badge-green { background-color: #d5f4e6; color: #27ae60; }
-        .badge-red { background-color: #fadbd8; color: #e74c3c; }
-        .badge-yellow { background-color: #fef9e7; color: #f39c12; }
-        .badge-blue { background-color: #ebf5fb; color: #3498db; }
-        .badge-purple { background-color: #f4ecf7; color: #8e44ad; }
+        .badge-green { background-color: #d5f4e6; color: #00a678; }
+        .badge-red { background-color: #fadbd8; color: #007348; }
+        .badge-yellow { background-color: #fef9e7; color: #009c6d; }
+        .badge-blue { background-color: #ebf5fb; color: #00925b; }
+        .badge-purple { background-color: #f4ecf7; color: #00925b; }
         
         .step-list {
             list-style-type: none;
@@ -240,7 +317,7 @@
         
         .step-list li:before {
             content: counter(step-counter);
-            background-color: #3498db;
+            background-color: #00925b;
             color: white;
             border-radius: 50%;
             width: 25px;
@@ -267,7 +344,7 @@
         
         .example-box {
             background-color: #f8f9fa;
-            border-left: 4px solid #3498db;
+            border-left: 4px solid #00925b;
             padding: 20px;
             margin: 20px 0;
             border-radius: 0 5px 5px 0;
@@ -293,7 +370,7 @@
         .log-warning { color: #ffcc00; }
         .log-error { color: #ff3333; }
         .log-critical { background-color: #990000; color: white; padding: 2px 4px; }
-        .log-smart { color: #8e44ad; }
+        .log-smart { color: #00925b; }
         
         .note {
             background-color: #fffde7;
@@ -313,7 +390,7 @@
         
         .important {
             background-color: #e3f2fd;
-            border-left: 4px solid #2196f3;
+            border-left: 4px solid #00925b;
             padding: 15px;
             margin: 20px 0;
             border-radius: 0 5px 5px 0;
@@ -329,6 +406,26 @@
             line-height: 1.6;
             white-space: pre;
             overflow-x: auto;
+            position: relative;
+            border: 1px solid #34495e;
+        }
+        
+        .directory-tree .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: #00925b;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background-color 0.3s;
+        }
+        
+        .directory-tree .copy-btn:hover {
+            background-color: #007348;
         }
         
         .tree-item {
@@ -336,7 +433,7 @@
         }
         
         .tree-icon {
-            color: #3498db;
+            color: #00925b;
         }
         
         .footer {
@@ -353,6 +450,53 @@
             position: relative;
             top: -80px;
             visibility: hidden;
+        }
+        
+        /* Mermaid diagram styling */
+        .mermaid-container {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 30px 0;
+            border: 1px solid #e1e8ed;
+            overflow-x: auto;
+        }
+        
+        .mermaid-container h3 {
+            color: #007348;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        /* Improved Mermaid diagram styling */
+        .mermaid {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+            font-size: 14px !important;
+        }
+        
+        .mermaid .node rect {
+            stroke-width: 2px;
+            rx: 8px;
+            ry: 8px;
+        }
+        
+        .mermaid .node text {
+            font-size: 14px !important;
+            font-weight: 500 !important;
+            fill: #333333 !important; /* Dark text for better contrast */
+        }
+        
+        .mermaid .edgeLabel {
+            font-size: 12px !important;
+            background-color: white !important;
+            padding: 2px 4px !important;
+            color: #333333 !important; /* Dark text for better contrast */
+        }
+        
+        /* Manual action styling for Mermaid */
+        .mermaid .node.manual rect {
+            stroke-dasharray: 5,5;
+            stroke-width: 2px;
         }
         
         @media (max-width: 768px) {
@@ -373,12 +517,24 @@
                 grid-template-columns: 1fr;
             }
         }
+        
+        /* Copy button success animation */
+        .copy-success {
+            background-color: #00a678 !important;
+            animation: pulse 0.5s ease-in-out;
+        }
+        
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>PostgreSQL Data Loader - Complete User Guide</h1>
-        <p style="color: #7f8c8d; margin-bottom: 30px;">Enhanced with Failed Rows Recovery, SMART AUDIT Mode & Comprehensive Error Reference</p>
+        <p style="color: #7f8c8d; margin-bottom: 30px;">Enhanced with Failed Rows Recovery, SMART AUDIT Mode & Simplified Index Management</p>
         
         <div class="toc">
             <h3>📋 Quick Navigation</h3>
@@ -386,14 +542,16 @@
                 <li><a href="#installation">1. Installation & Setup</a></li>
                 <li><a href="#directory">2. Directory Structure</a></li>
                 <li><a href="#configuration">3. Configuration</a></li>
-                <li><a href="#excel">4. Multi-Sheet Excel Configuration</a></li>
-                <li><a href="#modes">5. Processing Modes</a></li>
-                <li><a href="#logging">6. Enhanced Logging with Colors</a></li>
-                <li><a href="#error-recovery">7. Error Recovery</a></li>
-                <li><a href="#error-reference">8. Error Reference Table</a></li>
-                <li><a href="#troubleshooting">9. Troubleshooting</a></li>
-                <li><a href="#best-practices">10. Best Practices</a></li>
-                <li><a href="#commands">11. Command Reference</a></li>
+                <li><a href="#mapping">4. Mapping Configuration</a></li>
+                <li><a href="#excel">5. Multi-Sheet Excel Configuration</a></li>
+                <li><a href="#modes">6. Processing Modes</a></li>
+                <li><a href="#logging">7. Enhanced Logging</a></li>
+                <li><a href="#hash-calculation">8. Hash Calculation & Storage</a></li>
+                <li><a href="#error-recovery">9. Error Recovery</a></li>
+                <li><a href="#error-reference">10. Error Reference Table</a></li>
+                <li><a href="#troubleshooting">11. Troubleshooting</a></li>
+                <li><a href="#best-practices">12. Best Practices</a></li>
+                <li><a href="#commands">13. Command Reference</a></li>
             </ul>
         </div>
 
@@ -449,15 +607,16 @@ echo "Logs will be stored in: logs/"</div>
         <div class="directory-tree">data_loader/
 ├── loader_script.py              # Main loader script
 ├── global_loader_config.yaml     # Global configuration
-├── processing_progress.json      # Progress tracking
-├── loader.lock                   # Lock file (auto-generated)
-├── rules/                        # All configuration files
+├── rules/                        # All configuration files & progress tracking
 │   ├── sales_rule.yaml
 │   ├── inventory_rule.yaml
 │   ├── weekly_rule.yaml
 │   ├── sales_mapping.csv
 │   ├── inventory_mapping.csv
-│   └── weekly_mapping.csv
+│   ├── weekly_mapping.csv
+│   ├── sales_progress.json       # Progress tracking for sales rule
+│   ├── inventory_progress.json   # Progress tracking for inventory rule
+│   └── weekly_progress.json      # Progress tracking for weekly rule
 ├── inputs/                       # All input data directories
 │   ├── sales_data/
 │   │   ├── sales_20230101.csv
@@ -482,6 +641,11 @@ echo "Logs will be stored in: logs/"</div>
     ├── processing_20231201_143022.log
     ├── processing_20231201_150045.log
     └── processing_latest.log -> processing_20231201_150045.log</div>
+        
+        <div class="note">
+            <strong>📁 Progress Tracking Location:</strong> Progress files are now stored in the <code>rules/</code> folder with naming convention <code>{rule_name}_progress.json</code>. This keeps all rule-related files together for better organization.
+            <strong>Important:</strong> The old <code>processing_progress.json</code> file is no longer used.
+        </div>
 
         <!-- Configuration -->
         <span class="section-anchor" id="configuration"></span>
@@ -529,7 +693,10 @@ max_chunk_failures: 5
 generate_sample_files: false
 
 # Global Hash Exclusions
-global_hash_exclude_columns: []</div>
+global_hash_exclude_columns: []
+
+# Logging Configuration
+log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL</div>
         
         <h3>Global Configuration Parameters</h3>
         <table class="parameter-table">
@@ -694,7 +861,7 @@ global_hash_exclude_columns: []</div>
                 </tr>
                 <tr>
                     <td><strong>generate_sample_files</strong></td>
-                    <td>Generate sample configuration and data files</td>
+                    <td>Generate sample configuration files on first run</td>
                     <td>Boolean</td>
                     <td>false</td>
                 </tr>
@@ -703,6 +870,12 @@ global_hash_exclude_columns: []</div>
                     <td>Columns excluded from hash calculation</td>
                     <td>List</td>
                     <td>[]</td>
+                </tr>
+                <tr>
+                    <td><strong>log_level</strong></td>
+                    <td>Logging verbosity level</td>
+                    <td>String</td>
+                    <td>"INFO"</td>
                 </tr>
             </tbody>
         </table>
@@ -793,7 +966,7 @@ mapping_file: "rules/inventory_mapping.csv"</div>
                     <td><strong>mode</strong></td>
                     <td>Processing mode</td>
                     <td>String</td>
-                    <td>"insert"</td>
+                    <td>"insert", "smart_audit", or "cancel_and_replace"</td>
                 </tr>
                 <tr>
                     <td><strong>date_from_filename_col_name</strong></td>
@@ -841,18 +1014,274 @@ mapping_file: "rules/inventory_mapping.csv"</div>
         </table>
         
         <h3>Mapping Files Example (rules/sales_mapping.csv)</h3>
-        <div class="code-block">RawColumn,TargetColumn,DataType,LoadFlag,IndexColumn,data_source,definition,order
-OrderID,orderid,INTEGER,Y,Y,file,,0
-Customer,customer,TEXT,Y,N,file,,1
-Amount,amount,NUMERIC,Y,N,file,,2
-loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,,3
-source_filename,source_filename,TEXT,Y,N,system,,4
-content_hash,content_hash,TEXT,Y,N,system,,5
-operation,operation,TEXT,Y,N,system,,6</div>
+        <div class="code-block">RawColumn,TargetColumn,DataType,LoadFlag,Index,data_source,definition,order
+OrderID,orderid,INTEGER,Y,PK,file,"Primary key for orders",0
+Customer,customer,TEXT,Y,IS,file,"Customer name",1
+Amount,amount,NUMERIC,Y,N,file,"Order amount",2
+Region,region_code,TEXT,Y,IC_region_date_1,file,"Sales region",3
+SaleDate,sale_date,DATE,Y,IC_region_date_2,file,"Date of sale",4
+loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,"Timestamp when record was loaded",-1
+source_filename,source_filename,TEXT,Y,N,system,"Original source filename",-1
+content_hash,content_hash,TEXT,Y,N,system,"SHA256 hash of row content",-1
+operation,operation,TEXT,Y,N,system,"Operation type (insert, smart_audit, etc.)",-1</div>
+
+        <!-- Mapping Configuration -->
+        <span class="section-anchor" id="mapping"></span>
+        <h2>4. Mapping Configuration</h2>
+        
+        <p>The mapping file is a CSV that defines how source file columns map to database columns, including data types, loading rules, and simplified index configurations.</p>
+        
+        <h3>Mapping File Structure (rules/*_mapping.csv)</h3>
+        <div class="code-block">RawColumn,TargetColumn,DataType,LoadFlag,Index,data_source,definition,order
+OrderID,orderid,INTEGER,Y,PK,file,"Primary key for orders",0
+CustomerName,customer_name,TEXT,Y,IS,file,"Customer full name",1
+OrderAmount,order_amount,NUMERIC,Y,N,file,"Order total in currency",2
+OrderDate,order_date,DATE,Y,IC_order_date_1,file,"Date of order placement",3
+RegionCode,region_code,TEXT,Y,IC_order_date_2,file,"Regional code",4
+Status,status,TEXT,Y,N,file,"Order status",5
+loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,"Timestamp when record was loaded",-1
+source_filename,source_filename,TEXT,Y,N,system,"Original source filename",-1
+content_hash,content_hash,TEXT,Y,N,system,"SHA256 hash of row content",-1
+operation,operation,TEXT,Y,N,system,"Operation type (insert, smart_audit, etc.)",-1</div>
+        
+        <h3>Mapping Column Reference Table</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Column Name</th>
+                    <th>Description</th>
+                    <th>Required</th>
+                    <th>Allowed Values</th>
+                    <th>Example</th>
+                    <th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>RawColumn</strong></td>
+                    <td>Original column name in the source file (case-sensitive)</td>
+                    <td>Yes</td>
+                    <td>Any string matching source file header</td>
+                    <td>"Order ID", "Customer Name", "Amount €"</td>
+                    <td>Must exactly match the column header in your CSV/Excel file</td>
+                </tr>
+                <tr>
+                    <td><strong>TargetColumn</strong></td>
+                    <td>Column name in the PostgreSQL table (sanitized)</td>
+                    <td>Yes</td>
+                    <td>Lowercase, underscores, no spaces</td>
+                    <td>"order_id", "customer_name", "amount_eur"</td>
+                    <td>Automatically sanitized: lowercase, spaces→underscores, special chars removed</td>
+                </tr>
+                <tr>
+                    <td><strong>DataType</strong></td>
+                    <td>PostgreSQL data type for the column</td>
+                    <td>Yes</td>
+                    <td>PostgreSQL types: INTEGER, NUMERIC, TEXT, VARCHAR(n), TIMESTAMP, DATE, BOOLEAN</td>
+                    <td>"INTEGER", "NUMERIC(10,2)", "VARCHAR(255)", "TIMESTAMP"</td>
+                    <td>Supports type inference. For decimals, specify precision: NUMERIC(10,2)</td>
+                </tr>
+                <tr>
+                    <td><strong>LoadFlag</strong></td>
+                    <td>Whether to load this column into database</td>
+                    <td>Yes</td>
+                    <td>'Y' (load), 'N' (skip), '' (unconfigured - blocks processing)</td>
+                    <td>"Y", "N"</td>
+                    <td>Must be 'Y' or 'N'. Empty values block the entire rule until configured.</td>
+                </tr>
+                <tr>
+                    <td><strong>Index</strong></td>
+                    <td>Index type for performance and constraints</td>
+                    <td>No (default: 'N')</td>
+                    <td>'N', 'PK', 'IS', 'IU', 'IC_group_order'</td>
+                    <td>"PK", "IS", "IU", "IC_customer_date_1"</td>
+                    <td><strong>NEW: Simplified index management</strong>. See Index Types table below.</td>
+                </tr>
+                <tr>
+                    <td><strong>data_source</strong></td>
+                    <td>Source of the column data</td>
+                    <td>Yes</td>
+                    <td>'file', 'system'</td>
+                    <td>"file", "system"</td>
+                    <td>'file' = from source file, 'system' = auto-generated by loader</td>
+                </tr>
+                <tr>
+                    <td><strong>definition</strong></td>
+                    <td>Column description/documentation</td>
+                    <td>No</td>
+                    <td>Any text</td>
+                    <td>"Customer email address", "Order total in euros"</td>
+                    <td>For documentation only, not used in processing</td>
+                </tr>
+                <tr>
+                    <td><strong>order</strong></td>
+                    <td>Column position in source file (0-based)</td>
+                    <td>Yes</td>
+                    <td>0, 1, 2, ... or -1 for system columns</td>
+                    <td>"0", "1", "-1"</td>
+                    <td>Used for column ordering. System columns use -1.</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Index Types Reference</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Index Code</th>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>PostgreSQL Equivalent</th>
+                    <th>Use Case</th>
+                    <th>Example</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>N</strong></td>
+                    <td>No Index</td>
+                    <td>No index created (default)</td>
+                    <td>-</td>
+                    <td>Columns rarely used in WHERE clauses</td>
+                    <td>Descriptive text fields, comments</td>
+                </tr>
+                <tr>
+                    <td><strong>PK</strong></td>
+                    <td>Primary Key</td>
+                    <td>Unique identifier for table rows. Creates PRIMARY KEY constraint.</td>
+                    <td>PRIMARY KEY</td>
+                    <td>Unique identifiers (order_id, customer_id)</td>
+                    <td>Index: "PK" on orderid column</td>
+                </tr>
+                <tr>
+                    <td><strong>IS</strong></td>
+                    <td>Simple Index</td>
+                    <td>Standard B-tree index for faster searches</td>
+                    <td>CREATE INDEX</td>
+                    <td>Columns frequently filtered or sorted</td>
+                    <td>Index: "IS" on order_date column</td>
+                </tr>
+                <tr>
+                    <td><strong>IU</strong></td>
+                    <td>Unique Index</td>
+                    <td>Ensures unique values (not primary key)</td>
+                    <td>CREATE UNIQUE INDEX</td>
+                    <td>Columns that must be unique but aren't primary keys</td>
+                    <td>Index: "IU" on email column</td>
+                </tr>
+                <tr>
+                    <td><strong>IC_group_order</strong></td>
+                    <td>Composite Index</td>
+                    <td>Multi-column index for combined queries. Format: IC_group_order</td>
+                    <td>CREATE INDEX (col1, col2)</td>
+                    <td>Frequent multi-column WHERE clauses</td>
+                    <td>Index: "IC_customer_date_1" on customer_id,<br>"IC_customer_date_2" on order_date</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>System Columns (Automatically Added)</h3>
+        <p>These columns are automatically injected into every table and don't need to be in source files:</p>
+        
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Column</th>
+                    <th>Data Type</th>
+                    <th>Description</th>
+                    <th>Content</th>
+                    <th>LoadFlag</th>
+                    <th>Index</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>loaded_timestamp</strong></td>
+                    <td>TIMESTAMP</td>
+                    <td>When the row was inserted into database</td>
+                    <td>Current timestamp at insertion</td>
+                    <td>Y</td>
+                    <td>N</td>
+                </tr>
+                <tr>
+                    <td><strong>source_filename</strong></td>
+                    <td>TEXT</td>
+                    <td>Original source file name</td>
+                    <td>e.g., "sales_20240101.csv"</td>
+                    <td>Y</td>
+                    <td>N</td>
+                </tr>
+                <tr>
+                    <td><strong>content_hash</strong></td>
+                    <td>TEXT</td>
+                    <td>SHA256 hash of row content (for duplicate detection)</td>
+                    <td>64-character hex string</td>
+                    <td>Y</td>
+                    <td>N</td>
+                </tr>
+                <tr>
+                    <td><strong>operation</strong></td>
+                    <td>TEXT</td>
+                    <td>Processing mode used</td>
+                    <td>"insert", "smart_audit", "cancel_and_replace"</td>
+                    <td>Y</td>
+                    <td>N</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div class="note">
+            <strong>💡 Pro Tip:</strong> The <code>Index</code> column uses simple codes. For composite indexes, use the format <code>IC_group_order</code> where "group" is the index group name and "order" is the position in the composite index (starting at 1).
+        </div>
+        
+        <h3>Common Mapping Examples</h3>
+        
+        <h4>Example 1: Simple Table with Primary Key</h4>
+        <div class="code-block">RawColumn,TargetColumn,DataType,LoadFlag,Index,data_source,definition,order
+CustomerID,customer_id,INTEGER,Y,PK,file,"Unique customer identifier",0
+Name,customer_name,TEXT,Y,IS,file,"Customer full name",1
+Email,email,TEXT,Y,IU,file,"Customer email (must be unique)",2
+JoinDate,join_date,DATE,Y,N,file,"Date customer joined",3
+Active,active_status,BOOLEAN,Y,N,file,"Is customer active?",4</div>
+        
+        <h4>Example 2: Composite Index for Date Range Queries</h4>
+        <div class="code-block">RawColumn,TargetColumn,DataType,LoadFlag,Index,data_source,definition,order
+Region,region_code,TEXT,Y,IC_region_date_1,file,"Sales region",0
+SaleDate,sale_date,DATE,Y,IC_region_date_2,file,"Date of sale",1
+Product,product_id,TEXT,Y,N,file,"Product identifier",2
+Quantity,quantity,INTEGER,Y,N,file,"Units sold",3
+Revenue,revenue_amount,NUMERIC(10,2),Y,N,file,"Revenue in euros",4</div>
+        <p><em>Note: Creates composite index on (region_code, sale_date) for efficient region/date queries.</em></p>
+        
+        <h3>Mapping File Validation Rules</h3>
+        <ul class="step-list">
+            <li><strong>LoadFlag must be 'Y' or 'N':</strong> Empty values block the entire rule</li>
+            <li><strong>Index values must be valid:</strong> N, PK, IS, IU, or IC_* format</li>
+            <li><strong>TargetColumn names are sanitized:</strong> Lowercase, underscores, no special chars</li>
+            <li><strong>System columns are fixed:</strong> loaded_timestamp, source_filename, content_hash, operation</li>
+            <li><strong>Order matters:</strong> System columns should have order = -1</li>
+            <li><strong>Composite indexes must be consecutive:</strong> IC_group_1, IC_group_2, IC_group_3</li>
+        </ul>
+        
+        <h3>Troubleshooting Mapping Issues</h3>
+        <div class="bash-block"># Check mapping file syntax
+head -n 5 rules/sales_mapping.csv
+
+# Validate LoadFlag configuration
+grep -n ',,' rules/sales_mapping.csv  # Find empty LoadFlags
+
+# Check for invalid Index values
+grep -v -E ',(N|PK|IS|IU|IC_[a-z]+_[0-9]+),' rules/sales_mapping.csv
+
+# Count configured columns
+grep -c ',Y,' rules/sales_mapping.csv
+
+# Verify column names match source file
+head -n 1 inputs/sales_data/sales_20240101.csv | tr ',' '\n'</div>
 
         <!-- Multi-Sheet Excel Configuration -->
         <span class="section-anchor" id="excel"></span>
-        <h2>4. Multi-Sheet Excel Configuration</h2>
+        <h2>5. Multi-Sheet Excel Configuration</h2>
         
         <h3>Configuration Methods</h3>
         
@@ -881,7 +1310,10 @@ operation,operation,TEXT,Y,N,system,,6</div>
         <div class="note">
             <strong>✅ CORRECT YAML List Formats:</strong><br>
             <code>sheet_names: ["Sheet1", "Sheet2", "Sheet3"]</code> (inline list)<br>
-            <code>sheet_names: \n  - "Sheet1"\n  - "Sheet2"\n  - "Sheet3"</code> (multi-line list)
+            <code>sheet_names:</code><br>
+            <code>  - "Sheet1"</code><br>
+            <code>  - "Sheet2"</code><br>
+            <code>  - "Sheet3"</code> (multi-line list)
         </div>
         
         <div class="warning">
@@ -911,7 +1343,7 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
 
         <!-- Processing Modes -->
         <span class="section-anchor" id="modes"></span>
-        <h2>5. Processing Modes</h2>
+        <h2>6. Processing Modes</h2>
         
         <div class="mode-comparison">
             <div class="mode-card mode-insert">
@@ -921,18 +1353,18 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
                 </div>
                 <p><span class="mode-badge badge-green">Duplicates: EXPORTED</span></p>
                 <p><span class="mode-badge badge-yellow">Performance: STANDARD</span></p>
-                <p><strong>Use Case:</strong> Initial load, new data</p>
+                <p><strong>Use Case:</strong> Initial load, new data, need to review duplicates</p>
                 
                 <h4>Step-by-Step Process:</h4>
                 <ol class="step-list">
                     <li>File detection → Script scans `inputs/` directory</li>
-                    <li>Progress check → Checks if file already processed</li>
+                    <li>Progress check → Checks if file already processed (hash comparison)</li>
                     <li>Data loading → Reads CSV/Excel file</li>
                     <li>Data validation → Checks data types and constraints</li>
                     <li>Duplicate detection → Compares row hashes with database</li>
                     <li>Duplicate export → Duplicates go to `duplicates/to_process/`</li>
                     <li>New rows insertion → Only unique rows are inserted</li>
-                    <li>Progress tracking → Records in `processing_progress.json`</li>
+                    <li>Progress tracking → Records in `rules/{rule_name}_progress.json`</li>
                 </ol>
                 
                 <div class="example-box">
@@ -957,11 +1389,12 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
                 </div>
                 <p><span class="mode-badge badge-red">Duplicates: N/A</span></p>
                 <p><span class="mode-badge badge-red">Performance: HEAVY</span></p>
-                <p><strong>Use Case:</strong> Corrections, complete replacement</p>
+                <p><strong>Use Case:</strong> Corrections, complete replacement, file re-uploads</p>
                 
                 <h4>Step-by-Step Process:</h4>
                 <ol class="step-list">
                     <li>File detection → Scans `inputs/` directory</li>
+                    <li>Progress check → Checks if file changed (hash comparison)</li>
                     <li>Database search → Finds all rows with this `source_filename`</li>
                     <li>DELETION → Deletes all existing rows for this file</li>
                     <li>New data loading → Reads current file</li>
@@ -986,40 +1419,6 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
                 </div>
             </div>
             
-            <div class="mode-card mode-audit">
-                <div class="mode-header">
-                    <div class="mode-icon">A</div>
-                    <div class="mode-title">AUDIT Mode (Classic)</div>
-                </div>
-                <p><span class="mode-badge badge-green">Duplicates: EXPORTED</span></p>
-                <p><span class="mode-badge badge-yellow">Performance: GOOD</span></p>
-                <p><strong>Use Case:</strong> Rarely modified files</p>
-                
-                <h4>Step-by-Step Process:</h4>
-                <ol class="step-list">
-                    <li>File detection → Directory scan</li>
-                    <li>Timestamp check → Compares file modification date</li>
-                    <li>DECISION: If similar timestamp → SKIP file</li>
-                    <li>DECISION: If different timestamp → PROCESS like INSERT</li>
-                    <li>Processing → Same process as INSERT</li>
-                    <li>Logging → Shows if file skipped or processed</li>
-                </ol>
-                
-                <div class="example-box">
-                    <div class="example-title">Example:</div>
-                    <p>File: <code>weekly_20240101.xlsx</code> modified today</p>
-                    <p>Database: File processed yesterday</p>
-                    <p>Result: Processes file (changed)</p>
-                </div>
-                
-                <div class="example-log">
-                    <span class="log-info">INFO - CLASSIC AUDIT mode: weekly_20240101.xlsx</span><br>
-                    <span class="log-info">INFO - File changed: weekly_20240101.xlsx</span><br>
-                    <span class="log-info">INFO - Loaded 200 rows from weekly_20240101.xlsx</span><br>
-                    <span class="log-info">INFO - Successfully inserted 200 rows to weekly_reports table</span>
-                </div>
-            </div>
-            
             <div class="mode-card mode-smart">
                 <div class="mode-header">
                     <div class="mode-icon">S</div>
@@ -1027,7 +1426,7 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
                 </div>
                 <p><span class="mode-badge badge-red">Duplicates: SILENT</span></p>
                 <p><span class="mode-badge badge-green">Performance: EXCELLENT</span></p>
-                <p><strong>Use Case:</strong> Daily loads, stable data</p>
+                <p><strong>Use Case:</strong> Daily loads, stable data, high-volume incremental updates</p>
                 
                 <h4>Step-by-Step Process:</h4>
                 <ol class="step-list">
@@ -1035,7 +1434,7 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
                     <li>If file unchanged → SKIP completely (nothing to do)</li>
                     <li>If file changed → Loads data</li>
                     <li>Row hashes calculation → SHA256 hash for each row</li>
-                    <li>Database comparison → Finds all existing rows</li>
+                    <li>Database comparison → Finds all existing rows in entire table</li>
                     <li>Filtering → Keep only NEW rows (hash not in database)</li>
                     <li>Filtering → Silently ignore duplicates (no export)</li>
                     <li>Insertion → Insert only new rows</li>
@@ -1059,6 +1458,12 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
             </div>
         </div>
         
+        <div class="warning">
+            <strong>⚠️ IMPORTANT CHANGE:</strong> The <code>"audit"</code> mode has been completely removed. 
+            Use <code>"smart_audit"</code> for intelligent duplicate detection without exporting duplicates, 
+            or <code>"insert"</code> for normal processing with duplicate export.
+        </div>
+        
         <h3>Configuration Examples for Each Mode</h3>
         
         <h4>Insert Mode Configuration</h4>
@@ -1067,15 +1472,12 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
         <h4>Cancel and Replace Mode Configuration</h4>
         <div class="yaml-block">mode: "cancel_and_replace"</div>
         
-        <h4>Audit Mode Configuration</h4>
-        <div class="yaml-block">mode: "audit"</div>
-        
         <h4>Smart Audit Mode Configuration</h4>
         <div class="yaml-block">mode: "smart_audit"</div>
 
-        <!-- Enhanced Logging with Colors -->
+        <!-- Enhanced Logging (previously #logging, now #logging) -->
         <span class="section-anchor" id="logging"></span>
-        <h2>6. Enhanced Logging with Colors</h2>
+        <h2>7. Enhanced Logging</h2>
         
         <h3>Color System for Console Output</h3>
         <table class="parameter-table">
@@ -1127,6 +1529,113 @@ verify_excel_sheets("inputs/inventory_data/inventory_20230101.xlsx")</div>
             </tbody>
         </table>
         
+        <h3>Log Levels Configuration</h3>
+        <p>Log levels control the verbosity of logging output. Configure in <code>global_loader_config.yaml</code>:</p>
+        
+        <div class="yaml-block">log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL</div>
+        
+        <h3>Log Level Reference Table</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Log Level</th>
+                    <th>Numeric Value</th>
+                    <th>Description</th>
+                    <th>When to Use</th>
+                    <th>Example Messages</th>
+                    <th>Recommended For</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>DEBUG</strong></td>
+                    <td>10</td>
+                    <td>Detailed diagnostic information for developers</td>
+                    <td>Troubleshooting, development, deep inspection</td>
+                    <td>"Calculated file hash: a1b2c3...", "Row hash comparison: match"</td>
+                    <td>Development, debugging complex issues</td>
+                </tr>
+                <tr>
+                    <td><strong>INFO</strong></td>
+                    <td>20</td>
+                    <td>General operational information about system behavior</td>
+                    <td>Normal production monitoring, daily operations</td>
+                    <td>"Processing file: sales.csv", "Inserted 150 rows"</td>
+                    <td>Production (default), routine monitoring</td>
+                </tr>
+                <tr>
+                    <td><strong>WARNING</strong></td>
+                    <td>30</td>
+                    <td>Unexpected but non-critical events that might need attention</td>
+                    <td>Non-critical issues, things to review later</td>
+                    <td>"Empty sheet detected", "File skipped (already processed)"</td>
+                    <td>Production (shows issues without stopping)</td>
+                </tr>
+                <tr>
+                    <td><strong>ERROR</strong></td>
+                    <td>40</td>
+                    <td>Serious problems that prevent specific operations</td>
+                    <td>Operation failures that need investigation</td>
+                    <td>"Database connection failed", "File not found: data.csv"</td>
+                    <td>Error tracking, alerting on failures</td>
+                </tr>
+                <tr>
+                    <td><strong>CRITICAL</strong></td>
+                    <td>50</td>
+                    <td>Severe errors that may cause application termination</td>
+                    <td>System-level failures, unrecoverable errors</td>
+                    <td>"Cannot create log directory", "Database unreachable"</td>
+                    <td>Critical failure alerts, system monitoring</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Log Level Hierarchy</h3>
+        <p>Log levels follow a hierarchy: each level includes all higher severity levels.</p>
+        
+        <div style="background: linear-gradient(90deg, #00a678, #009c6d, #007348); padding: 15px; border-radius: 5px; margin: 20px 0; color: white; text-align: center;">
+            <strong>DEBUG ← INFO ← WARNING ← ERROR ← CRITICAL</strong><br>
+            <small>(Increasing severity → Fewer messages)</small>
+        </div>
+        
+        <h4>What Each Level Includes:</h4>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Configured Level</th>
+                    <th>Shows Messages Of Type</th>
+                    <th>Typical Output Volume</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>DEBUG</strong></td>
+                    <td>DEBUG + INFO + WARNING + ERROR + CRITICAL</td>
+                    <td>Very High (500-5000+ lines per run)</td>
+                </tr>
+                <tr>
+                    <td><strong>INFO</strong></td>
+                    <td>INFO + WARNING + ERROR + CRITICAL</td>
+                    <td>Medium (50-500 lines per run)</td>
+                </tr>
+                <tr>
+                    <td><strong>WARNING</strong></td>
+                    <td>WARNING + ERROR + CRITICAL</td>
+                    <td>Low (5-50 lines per run)</td>
+                </tr>
+                <tr>
+                    <td><strong>ERROR</strong></td>
+                    <td>ERROR + CRITICAL</td>
+                    <td>Very Low (0-10 lines per run)</td>
+                </tr>
+                <tr>
+                    <td><strong>CRITICAL</strong></td>
+                    <td>CRITICAL only</td>
+                    <td>Minimal (0-2 lines per run)</td>
+                </tr>
+            </tbody>
+        </table>
+        
         <h3>Example Log Output</h3>
         <div class="code-block" style="background-color: #1a1a1a; white-space: pre-wrap; color: #fff;">2024-01-15 10:30:45 - INFO - [loader_script.py:150] - Database connection successful
 2024-01-15 10:30:45 - INFO - Database connection pool initialized: 1-5 connections
@@ -1162,32 +1671,251 @@ tail -f logs/processing_latest.log | grep --color=always -E "(ERROR|WARNING|CRIT
 # Count warnings
 grep -c "WARNING" logs/processing_latest.log</div>
         
-        <h3>Debug Mode Configuration</h3>
-        <p>Enable detailed logging by modifying the script or using environment variable:</p>
+        <h3>Log Level Configuration Examples</h3>
         
-        <h4>Option 1: Modify Script</h4>
-        <div class="code-block">logging.basicConfig(
-    level=logging.DEBUG,  # Change from INFO to DEBUG
-    format="%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s",
-    handlers=[
-        logging.FileHandler(log_filepath, encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)</div>
+        <h4>Production Environment (Recommended)</h4>
+        <div class="yaml-block">log_level: "INFO"  # Shows operations and errors, hides debug details</div>
+        <div class="example-log">
+            <span class="log-info">2024-01-15 09:30:00 - INFO - Processing file: sales_20240101.csv</span><br>
+            <span class="log-info">2024-01-15 09:30:01 - INFO - Loaded 1000 rows from sales_20240101.csv</span><br>
+            <span class="log-warning">2024-01-15 09:30:02 - WARNING - Found 15 duplicate rows (exported to duplicates/)</span><br>
+            <span class="log-info">2024-01-15 09:30:03 - INFO - Successfully inserted 985 rows</span>
+        </div>
         
-        <h4>Option 2: Environment Variable</h4>
-        <div class="bash-block"># Set debug level via environment
+        <h4>Development/Debugging</h4>
+        <div class="yaml-block">log_level: "DEBUG"  # Shows everything including hash calculations</div>
+        <div class="example-log">
+            <span class="log-info">2024-01-15 09:30:00 - DEBUG - Calculating file hash for sales_20240101.csv</span><br>
+            <span class="log-info">2024-01-15 09:30:00 - DEBUG - File hash: a1b2c3d4e5f6...</span><br>
+            <span class="log-info">2024-01-15 09:30:01 - DEBUG - Reading CSV with skiprows=0, header=0</span><br>
+            <span class="log-info">2024-01-15 09:30:01 - DEBUG - Raw columns: ['OrderID', 'Customer', 'Amount']</span><br>
+            <span class="log-info">2024-01-15 09:30:02 - DEBUG - Calculating row hashes (1000 rows)</span><br>
+            <span class="log-info">2024-01-15 09:30:02 - INFO - Processing file: sales_20240101.csv</span>
+        </div>
+        
+        <h4>Quiet Mode (Only Errors)</h4>
+        <div class="yaml-block">log_level: "ERROR"  # Only shows errors, perfect for scheduled jobs</div>
+        <div class="example-log">
+            <span class="log-error">2024-01-15 09:30:02 - ERROR - Database connection failed: timeout</span><br>
+            <span class="log-critical">2024-01-15 09:30:03 - CRITICAL - Processing stopped due to database error</span>
+        </div>
+        
+        <h3>Changing Log Level Without Restart</h3>
+        <div class="code-block"># Method 1: Edit global_loader_config.yaml
+sed -i 's/log_level: ".*"/log_level: "DEBUG"/' global_loader_config.yaml
+
+# Method 2: Use environment variable (overrides config file)
 export LOG_LEVEL=DEBUG
 python loader_script.py
 
-# Or for maximum verbosity
-export LOG_LEVEL=DEBUG
-export VERBOSE=1
-python loader_script.py</div>
+# Method 3: Temporary change for one run
+LOG_LEVEL=WARNING python loader_script.py
 
-        <!-- Error Recovery -->
+# Method 4: Check current log level
+grep "log_level" global_loader_config.yaml</div>
+        
+        <h3>Log Filtering Commands</h3>
+        <div class="bash-block"># View only ERROR and CRITICAL messages
+grep -E "(ERROR|CRITICAL)" logs/processing_latest.log
+
+# View SMART AUDIT specific logs  
+grep "SMART AUDIT" logs/processing_latest.log
+
+# View warnings excluding SMART AUDIT
+grep "WARNING" logs/processing_latest.log | grep -v "SMART AUDIT"
+
+# Count messages by level
+grep -c " - DEBUG - " logs/processing_latest.log
+grep -c " - INFO - " logs/processing_latest.log
+grep -c " - WARNING - " logs/processing_latest.log
+grep -c " - ERROR - " logs/processing_latest.log
+grep -c " - CRITICAL - " logs/processing_latest.log
+
+# Monitor real-time with level filtering
+tail -f logs/processing_latest.log | grep --color=always -E "(ERROR|CRITICAL)"  # Only errors
+tail -f logs/processing_latest.log | grep --color=always -E "(WARNING|ERROR|CRITICAL)"  # Issues only
+tail -f logs/processing_latest.log | grep --color=always -v "DEBUG"  # Exclude debug messages</div>
+        
+        <div class="note">
+            <strong>📊 Performance Impact:</strong> DEBUG level can significantly increase processing time (10-30% slower) due to extensive logging. Use DEBUG only when troubleshooting.
+        </div>
+        
+        <div class="important">
+            <strong>✅ Best Practice:</strong> Use <code>INFO</code> level for production. Switch to <code>DEBUG</code> only when investigating issues. Use <code>ERROR</code> for scheduled/cron jobs to keep logs clean.
+        </div>
+
+        <!-- Hash Calculation & Storage (previously #hash-calculation, now #hash-calculation) -->
+        <span class="section-anchor" id="hash-calculation"></span>
+        <h2>8. Hash Calculation & Storage</h2>
+        
+        <h3>Overview</h3>
+        <p>The PostgreSQL Data Loader uses SHA256 hashing at multiple levels for efficient duplicate detection and file change tracking:</p>
+        
+        <h3>1. File-Level Hashing (Progress Tracking)</h3>
+        <ul class="step-list">
+            <li><strong>Purpose:</strong> Detect if a file has changed since last processing</li>
+            <li><strong>Algorithm:</strong> SHA256 of the entire file binary content</li>
+            <li><strong>Storage:</strong> Stored in <code>rules/{rule_name}_progress.json</code></li>
+            <li><strong>Used in:</strong> All processing modes to skip unchanged files</li>
+            <li><strong>Configuration:</strong> Controlled by <code>enable_progress_tracking</code> in global config</li>
+        </ul>
+        
+        <div class="code-block"># Example file hash calculation
+import hashlib
+
+def calculate_file_hash(filepath):
+    hasher = hashlib.sha256()
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()  # 64-character hex string</div>
+        
+        <h3>2. Row-Level Hashing (Duplicate Detection)</h3>
+        <ul class="step-list">
+            <li><strong>Purpose:</strong> Detect duplicate rows within and across files</li>
+            <li><strong>Algorithm:</strong> SHA256 of row content (JSON-serialized, sorted keys)</li>
+            <li><strong>Storage:</strong> Stored in <code>content_hash</code> column in database tables</li>
+            <li><strong>Used in:</strong> All processing modes for duplicate detection</li>
+            <li><strong>Exclusions:</strong> Certain columns can be excluded from hash calculation</li>
+        </ul>
+        
+        <div class="code-block"># Example row hash calculation
+import hashlib
+import json
+
+def calculate_row_hash(row_dict, exclude_columns=None):
+    """Calculate SHA256 hash of row data"""
+    if exclude_columns:
+        data = {k: v for k, v in row_dict.items() if k not in exclude_columns}
+    else:
+        data = row_dict
+    
+    # Sort keys for consistent hashing
+    sorted_data = json.dumps(data, sort_keys=True, default=str)
+    
+    hasher = hashlib.sha256()
+    hasher.update(sorted_data.encode('utf-8'))
+    return hasher.hexdigest()  # 64-character hex string</div>
+        
+        <h3>Hash Configuration Parameters</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Location</th>
+                    <th>Description</th>
+                    <th>Default</th>
+                    <th>Example</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>global_hash_exclude_columns</strong></td>
+                    <td>Global Config</td>
+                    <td>Columns excluded from ALL hash calculations globally</td>
+                    <td>[]</td>
+                    <td>["loaded_timestamp", "source_filename"]</td>
+                </tr>
+                <tr>
+                    <td><strong>hash_exclude_columns</strong></td>
+                    <td>Rule Config</td>
+                    <td>Columns excluded from hash calculations for specific rule</td>
+                    <td>[]</td>
+                    <td>["temporary_id", "processing_flag"]</td>
+                </tr>
+                <tr>
+                    <td><strong>RESERVED_COLUMNS</strong></td>
+                    <td>System Default</td>
+                    <td>Automatically excluded system columns</td>
+                    <td>loaded_timestamp, source_filename, content_hash, operation</td>
+                    <td>N/A</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Hash Storage Locations</h3>
+        
+        <h4>Progress Tracking Hashes</h4>
+        <div class="code-block"># Structure of rules/{rule_name}_progress.json
+{
+    "inputs/sales_data/sales_20240101.csv": {
+        "timestamp": "2024-01-15T10:30:45",
+        "hash": "a1b2c3d4e5f6...",  # File hash
+        "config_hash": "x7y8z9...",      # Configuration hash
+        "rule": "sales",
+        "target_table": "sales",
+        "processed_at": "2024-01-15T10:30:46"
+    }
+}</div>
+        
+        <h4>Database Row Hashes</h4>
+        <div class="code-block">-- Example table with content_hash column
+SELECT orderid, customer, amount, content_hash 
+FROM sales 
+WHERE source_filename = 'sales_20240101.csv'
+LIMIT 3;
+
+-- Result:
+-- orderid | customer | amount | content_hash
+-- --------+----------+--------+----------------------------------
+-- 1001    | John Doe| 150.00 | e3b0c44298fc1c149afbf4c8996fb924...
+-- 1002    | Jane Doe| 200.00 | 9f86d081884c7d659a2feaa0c55ad015...
+-- 1003    | Bob Smith| 75.00 | d4735e3a265e16eee03f59718b9b5d03...</div>
+        
+        <h3>Hash Usage by Processing Mode</h3>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>Mode</th>
+                    <th>File Hash</th>
+                    <th>Row Hash</th>
+                    <th>Purpose</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>SMART AUDIT</strong></td>
+                    <td>✅ Primary check</td>
+                    <td>✅ Secondary check</td>
+                    <td>Skip unchanged files, filter new rows only</td>
+                </tr>
+                <tr>
+                    <td><strong>INSERT</strong></td>
+                    <td>✅ Progress tracking</td>
+                    <td>✅ Duplicate detection</td>
+                    <td>Track processed files, export duplicates</td>
+                </tr>
+                <tr>
+                    <td><strong>CANCEL & REPLACE</strong></td>
+                    <td>✅ Progress tracking</td>
+                    <td>❌ Not used</td>
+                    <td>Skip unchanged files, delete and reinsert if changed</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Performance Considerations</h3>
+        <ul class="step-list">
+            <li><strong>Hash calculation</strong> adds ~5-10% overhead depending on row size</li>
+            <li>Exclude large text/binary columns from hashing using <code>hash_exclude_columns</code></li>
+            <li>Consider excluding frequently changing timestamp columns</li>
+            <li>Hash comparisons are O(1) operations (very fast)</li>
+            <li>Database indexes on <code>content_hash</code> column improve performance</li>
+        </ul>
+        
+        <div class="important">
+            <strong>🔐 Security Note:</strong> SHA256 is cryptographically secure and provides:
+            <ul>
+                <li><strong>Collision resistance:</strong> Extremely unlikely for different inputs to produce same hash</li>
+                <li><strong>Deterministic:</strong> Same input always produces same hash</li>
+                <li><strong>Fixed length:</strong> Always 64 hexadecimal characters (256 bits)</li>
+                <li><strong>One-way:</strong> Cannot reconstruct original data from hash</li>
+            </ul>
+        </div>
+
+        <!-- Error Recovery (previously #error-recovery, now #error-recovery) -->
         <span class="section-anchor" id="error-recovery"></span>
-        <h2>7. Error Recovery</h2>
+        <h2>9. Error Recovery</h2>
         
         <h3>Failed Rows Recovery Process</h3>
         
@@ -1296,9 +2024,9 @@ python loader_script.py</div>
             <li>Run loader - it will automatically detect and process</li>
         </ol>
 
-        <!-- Error Reference Table -->
+        <!-- Error Reference Table (previously #error-reference, now #error-reference) -->
         <span class="section-anchor" id="error-reference"></span>
-        <h2>8. Error Reference Table</h2>
+        <h2>10. Error Reference Table</h2>
         
         <h3>OS & File System Errors</h3>
         <table class="parameter-table">
@@ -1605,9 +2333,9 @@ python loader_script.py</div>
             </tbody>
         </table>
 
-        <!-- Troubleshooting -->
+        <!-- Troubleshooting (previously #troubleshooting, now #troubleshooting) -->
         <span class="section-anchor" id="troubleshooting"></span>
-        <h2>9. Troubleshooting</h2>
+        <h2>11. Troubleshooting</h2>
         
         <h3>Common Issues & Solutions</h3>
         
@@ -1721,9 +2449,9 @@ def debug_smart_audit_mode(file_path, table_name):
 # Usage
 debug_smart_audit_mode("inputs/sales_data/sales_20230101.csv", "sales_table")</div>
 
-        <!-- Best Practices -->
+        <!-- Best Practices (previously #best-practices, now #best-practices) -->
         <span class="section-anchor" id="best-practices"></span>
-        <h2>10. Best Practices</h2>
+        <h2>12. Best Practices</h2>
         
         <h3>File Management</h3>
         <ul class="step-list">
@@ -1762,6 +2490,15 @@ debug_smart_audit_mode("inputs/sales_data/sales_20230101.csv", "sales_table")</d
             <li>Consider using `insert` mode with duplicate export when manual review of duplicates is required</li>
         </ul>
         
+        <h3>Simplified Index Management Best Practices</h3>
+        <ul class="step-list">
+            <li>Use `PK` for primary key columns (single or composite)</li>
+            <li>Use `IS` for columns frequently used in WHERE clauses</li>
+            <li>Use `IU` for columns that must be unique but aren't primary keys</li>
+            <li>Use `IC_group_order` format for composite indexes (e.g., `IC_customer_date_1`, `IC_customer_date_2`)</li>
+            <li>Set `Index` to `N` for columns rarely queried</li>
+        </ul>
+        
         <h3>Performance Optimization</h3>
         <ul class="step-list">
             <li>Use appropriate `batch_size` for your data volume</li>
@@ -1780,9 +2517,9 @@ debug_smart_audit_mode("inputs/sales_data/sales_20230101.csv", "sales_table")</d
             <li>Protect log files from unauthorized access</li>
         </ul>
 
-        <!-- Command Reference -->
+        <!-- Command Reference (previously #commands, now #commands) -->
         <span class="section-anchor" id="commands"></span>
-        <h2>11. Command Reference</h2>
+        <h2>13. Command Reference</h2>
         
         <h3>Basic Usage</h3>
         <div class="bash-block"># Standard processing
@@ -1809,7 +2546,7 @@ tail -n 50 logs/processing_latest.log
 find . -name "loader.lock" -mtime +1 -exec ls -la {} \;
 
 # Clean old progress data (keep last 30 days)
-find . -name "processing_progress.json" -mtime +30 -exec rm {} \;
+find . -name "*_progress.json" -mtime +30 -exec rm {} \;
 
 # Archive processed files
 tar -czf processed_$(date +%Y%m%d).tar.gz duplicates/processed/ format_conflict/processed/ failed_rows/processed/
@@ -1845,7 +2582,7 @@ required_dirs=(
 for dir in "${required_dirs[@]}"; do
     if [ -d "$dir" ]; then
         echo "✅ $dir exists"
-    else
+    else:
         echo "❌ $dir missing"
     fi
 done
@@ -1864,6 +2601,16 @@ for file in "${essential_files[@]}"; do
     fi
 done
 
+# Check for progress files in rules folder
+echo ""
+echo "Checking progress files in rules/ folder:"
+for progress_file in rules/*_progress.json; do
+    if [ -f "$progress_file" ]; then
+        rule_name=$(basename "$progress_file" _progress.json)
+        echo "✅ Progress file exists for rule: $rule_name"
+    fi
+done
+
 echo ""
 echo "Structure verification completed!"</div>
         
@@ -1877,13 +2624,17 @@ echo "Structure verification completed!"</div>
             5. <strong>Check Error Reference</strong>: Use the comprehensive error table above<br>
             6. <strong>Examine Failed Rows</strong>: Review files in <code>failed_rows/</code> directory<br>
             7. <strong>Check SMART AUDIT Statistics</strong>: Search for "SMART AUDIT:" in logs<br>
-            8. <strong>Use Color Coding</strong>: Leverage color-coded logs for quick issue identification
+            8. <strong>Use Color Coding</strong>: Leverage color-coded logs for quick issue identification<br>
+            9. <strong>Check Progress Files</strong>: Review <code>rules/{rule_name}_progress.json</code> for tracking issues<br>
+            10. <strong>Verify Hash Calculations</strong>: Use debug mode to check hash consistency<br>
+            11. <strong>Validate Index Configuration</strong>: Check that <code>Index</code> column uses valid codes (N, PK, IS, IU, IC_*)<br>
+            12. <strong>Note Mode Changes</strong>: Remember that <code>audit</code> mode has been removed - use <code>smart_audit</code> instead
         </div>
 
         <div class="footer">
             <p><strong>PostgreSQL Data Loader - Complete User Guide</strong></p>
-            <p>Version 2.0 | Enhanced with SMART AUDIT Mode & Colored Logging</p>
-            <p>Last Updated: January 2024 | Complete documentation with all features and examples</p>
+            <p>Version 2.1 | Enhanced with SMART AUDIT Mode & Simplified Index Management</p>
+            <p>Last Updated: January 2024 | Updated to reflect code changes: Removed audit mode, simplified index configuration</p>
         </div>
     </div>
     
@@ -1925,7 +2676,7 @@ echo "Structure verification completed!"</div>
                 link.classList.remove('active');
                 if (link.getAttribute('href') === `#${currentSection}`) {
                     link.classList.add('active');
-                    link.style.color = '#1a5276';
+                    link.style.color = '#007348';
                     link.style.fontWeight = 'bold';
                 } else {
                     link.style.color = '';
@@ -1934,21 +2685,52 @@ echo "Structure verification completed!"</div>
             });
         });
         
-        // Copy code blocks on click
-        document.querySelectorAll('.code-block, .bash-block, .yaml-block, .directory-tree').forEach(block => {
-            block.addEventListener('click', function() {
-                const text = this.textContent;
-                navigator.clipboard.writeText(text).then(() => {
-                    const originalBorder = this.style.border;
-                    this.style.border = '2px solid #27ae60';
-                    this.style.transition = 'border 0.3s';
+        // Add copy buttons to code blocks
+        function addCopyButtons() {
+            const codeBlocks = document.querySelectorAll('.code-block, .bash-block, .yaml-block, .directory-tree');
+            
+            codeBlocks.forEach(block => {
+                // Don't add button if already exists
+                if (block.querySelector('.copy-btn')) return;
+                
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-btn';
+                copyBtn.textContent = '📋 Copy';
+                copyBtn.title = 'Copy to clipboard';
+                
+                copyBtn.addEventListener('click', function() {
+                    const text = block.textContent.replace('📋 Copy', '').trim();
                     
-                    setTimeout(() => {
-                        this.style.border = originalBorder;
-                    }, 1000);
+                    navigator.clipboard.writeText(text).then(() => {
+                        // Show success animation
+                        const originalText = copyBtn.textContent;
+                        copyBtn.textContent = '✅ Copied!';
+                        copyBtn.classList.add('copy-success');
+                        
+                        setTimeout(() => {
+                            copyBtn.textContent = originalText;
+                            copyBtn.classList.remove('copy-success');
+                        }, 2000);
+                    }).catch(err => {
+                        console.error('Failed to copy: ', err);
+                        copyBtn.textContent = '❌ Failed';
+                        setTimeout(() => {
+                            copyBtn.textContent = '📋 Copy';
+                        }, 2000);
+                    });
                 });
+                
+                block.appendChild(copyBtn);
             });
-        });
+        }
+        
+        // Initialize copy buttons
+        document.addEventListener('DOMContentLoaded', addCopyButtons);
+        
+        // Reinitialize Mermaid for any dynamically added diagrams
+        if (window.mermaid) {
+            mermaid.init();
+        }
     </script>
 </body>
 </html>
