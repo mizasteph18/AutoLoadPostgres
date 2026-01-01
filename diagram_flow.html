@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PostgreSQL Data Loader - Data Flow Diagram</title>
+    <!-- Mermaid.js for diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#007348',
+                primaryTextColor: '#ffffff',
+                primaryBorderColor: '#00925b',
+                lineColor: '#009c6d',
+                secondaryColor: '#8dc9ab',
+                tertiaryColor: '#00a678',
+                fontFamily: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif',
+                fontSize: '14px'
+            }
+        });
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #f5f7fa;
+            color: #333;
+            line-height: 1.6;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #007348;
+            border-bottom: 3px solid #00925b;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        h2 {
+            color: #009c6d;
+            margin-top: 30px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+        
+        h3 {
+            color: #007348;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+        
+        .parameter-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            box-shadow: 0 0 10px rgba(0,0,0,0.05);
+            font-size: 14px;
+        }
+        
+        .parameter-table thead tr {
+            background-color: #00925b;
+            color: white;
+            text-align: left;
+        }
+        
+        .parameter-table th,
+        .parameter-table td {
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            vertical-align: top;
+        }
+        
+        .parameter-table tbody tr {
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .parameter-table tbody tr:nth-of-type(even) {
+            background-color: #f8f9fa;
+        }
+        
+        .parameter-table tbody tr:hover {
+            background-color: #e8f4fc;
+        }
+        
+        .mermaid-container {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 30px 0;
+            border: 1px solid #e1e8ed;
+            overflow-x: auto;
+        }
+        
+        .mermaid-container h3 {
+            color: #007348;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        /* Improved Mermaid diagram styling */
+        .mermaid {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+            font-size: 14px !important;
+        }
+        
+        .mermaid .node rect {
+            stroke-width: 2px;
+            rx: 8px;
+            ry: 8px;
+        }
+        
+        .mermaid .node text {
+            font-size: 14px !important;
+            font-weight: 500 !important;
+            fill: #333333 !important;
+        }
+        
+        .mermaid .edgeLabel {
+            font-size: 12px !important;
+            background-color: white !important;
+            padding: 2px 4px !important;
+            color: #333333 !important;
+        }
+        
+        /* Manual action styling for Mermaid */
+        .mermaid .node.manual rect {
+            stroke-dasharray: 5,5;
+            stroke-width: 2px;
+        }
+        
+        .step-list {
+            list-style-type: none;
+            padding-left: 0;
+            margin: 15px 0;
+            counter-reset: step-counter;
+        }
+        
+        .step-list li {
+            counter-increment: step-counter;
+            margin-bottom: 10px;
+            padding-left: 35px;
+            position: relative;
+        }
+        
+        .step-list li:before {
+            content: counter(step-counter);
+            background-color: #00925b;
+            color: white;
+            border-radius: 50%;
+            width: 25px;
+            height: 25px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            position: absolute;
+            left: 0;
+            top: 0;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .legend-box {
+            background-color: #f8f9fa;
+            border: 1px solid #e1e8ed;
+            border-radius: 8px;
+            padding: 25px;
+            margin: 25px 0;
+        }
+        
+        .legend-box h3 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #007348;
+            text-align: left;
+        }
+        
+        .legend-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: flex-start;
+            margin: 8px 0;
+        }
+        
+        .legend-icon {
+            min-width: 30px;
+            height: 30px;
+            border-radius: 4px;
+            margin-right: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #ddd;
+        }
+        
+        .color-success { background-color: #2e7d32; }
+        .color-warning { background-color: #f57c00; }
+        .color-error { background-color: #c62828; }
+        .color-info { background-color: #1565c0; }
+        .color-manual { background-color: #616161; border-style: dashed; }
+        
+        .hash-distinction-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 14px;
+        }
+        
+        .hash-distinction-table th {
+            background-color: #00925b;
+            color: white;
+            text-align: left;
+            padding: 12px 15px;
+        }
+        
+        .hash-distinction-table td {
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            vertical-align: top;
+        }
+        
+        .hash-distinction-table tr:nth-of-type(even) {
+            background-color: #f8f9fa;
+        }
+        
+        .info-box {
+            background-color: #e8f4fc;
+            border-left: 4px solid #1565c0;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 0 4px 4px 0;
+        }
+        
+        .mode-comparison {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 25px 0;
+        }
+        
+        .mode-card {
+            background-color: #f8f9fa;
+            border: 1px solid #e1e8ed;
+            border-radius: 8px;
+            padding: 20px;
+            transition: transform 0.2s;
+        }
+        
+        .mode-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .mode-card h4 {
+            color: #007348;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e1e8ed;
+        }
+        
+        .mode-card ul {
+            padding-left: 20px;
+            margin: 10px 0;
+        }
+        
+        .mode-card li {
+            margin-bottom: 8px;
+        }
+        
+        .directory-structure {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            border: 1px solid #e1e8ed;
+        }
+        
+        .directory-tree {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.8;
+            margin: 15px 0;
+        }
+        
+        .directory-tree .folder {
+            color: #007348;
+            font-weight: bold;
+        }
+        
+        .directory-tree .file {
+            color: #1565c0;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .parameter-table,
+            .hash-distinction-table {
+                font-size: 12px;
+            }
+            
+            .parameter-table th,
+            .parameter-table td,
+            .hash-distinction-table th,
+            .hash-distinction-table td {
+                padding: 8px 10px;
+            }
+            
+            .legend-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .mode-comparison {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PostgreSQL Data Loader - Data Flow Diagram</h1>
+        
+        <div class="mermaid-container">
+            <h3>PostgreSQL Data Loader Processing Flow</h3>
+            <div class="mermaid">
+graph TD
+    %% Main Flow
+    A["Start Processing"] --> B["Script: Load Configuration"]
+    B --> C["Script: Initialize Database Connection"]
+    C --> D["Script: Acquire Lock"]
+    D --> E{"Lock Acquired?"}
+    E -->|Yes| F["Script: Scan Input Directories"]
+    E -->|No| G["Script: Exit - Another instance running"]
+    
+    %% File Discovery with per-rule tracking
+    F --> H["Script: Match Files with Rules"]
+    H --> I{"Found Files?"}
+    I -->|Yes| J["Script: Check Per-Rule Progress Tracking"]
+    I -->|No| K["Script: No files to process"]
+    
+    %% FILE-LEVEL HASH CHECK (for ALL modes) - Added based on script
+    J --> FH{"File-Level Hash Check"}
+    FH -->|Unchanged| FK["Script: Skip - File unchanged"]
+    FH -->|Changed| L{"Processing Mode"}
+    
+    %% Processing Modes
+    L -->|INSERT| M["Script: Load File Data"]
+    L -->|SMART AUDIT| N["Script: Check Row-Level Hashes"]
+    L -->|CANCEL & REPLACE| O["Script: Delete Existing Data"]
+    
+    %% SMART AUDIT Mode - Row-level hash comparison
+    N --> Q{"New Rows Exist?"}
+    Q -->|No| R["Script: Skip - All rows already exist"]
+    Q -->|Yes| S["Script: Load & Compare Row Hashes"]
+    S --> T["Script: Filter New Rows Only"]
+    T --> U["Script: Insert New Rows"]
+    
+    %% INSERT Mode Path - Row-level duplicate detection
+    M --> V["Script: Validate Data Types"]
+    V --> W["Script: Detect Duplicates (Row-Level Hash)"]
+    W --> X{"Duplicates Found?"}
+    X -->|Yes| Y["Manual: Export to duplicates/"]
+    X -->|No| Z["Script: Insert All Rows"]
+    Y --> Z
+    
+    %% CANCEL & REPLACE Path - File-level hash already checked
+    O --> AA["Script: Load New Data"]
+    AA --> BB["Script: Insert All Rows"]
+    
+    %% Format Conflict Path
+    V --> NN{"Format Conflicts?"}
+    NN -->|Yes| OO["Manual: format_conflict/to_process/"]
+    
+    %% Manual Intervention Steps
+    FK -.-> RL["Script: Release Lock"]
+    Y -.-> MM["Manual: duplicates/to_process/"]
+    OO -.-> PP["Manual: Correction Required"]
+    
+    %% Common Processing
+    Z --> FF["Script: Database Insertion"]
+    U --> FF
+    BB --> FF
+    
+    %% Error Handling
+    FF --> GG{"Insertion Successful?"}
+    GG -->|Partial Failure| HH["Manual: Export Failed Rows"]
+    HH --> II["Manual: failed_rows/to_process/"]
+    GG -->|Success| JJ["Script: Mark as Processed"]
+    
+    %% Manual Intervention Steps (dashed borders)
+    HH -.-> II;
+    
+    %% Manual Action Nodes
+    subgraph "Manual Intervention Required"
+        MM["Manual: duplicates/to_process/"]
+        OO["Manual: format_conflict/to_process/"]
+        II["Manual: failed_rows/to_process/"]
+    end
+    
+    %% Cleanup
+    JJ --> KK["Script: Release Lock"]
+    II --> KK
+    R --> KK
+    K --> KK
+    FK --> RL["Script: Release Lock"]
+    RL --> LL["End Processing"]
+    KK --> LL
+    
+    %% Styling with DARKER colors for better contrast
+    classDef success fill:#2e7d32,stroke:#1b5e20,stroke-width:2px;
+    classDef warning fill:#f57c00,stroke:#e65100,stroke-width:2px;
+    classDef error fill:#c62828,stroke:#b71c1c,stroke-width:2px;
+    classDef info fill:#1565c0,stroke:#0d47a1,stroke-width:2px;
+    classDef manual fill:#616161,stroke:#424242,stroke-width:2px,stroke-dasharray:5,5;
+    
+    class JJ,R,FK,RL success;
+    class Y,OO,X,NN warning;
+    class G,GG error;
+    class M,N,O,V,W,T,Q,S,FF,FH,J,H info;
+    class MM,OO,II manual;
+            </div>
+        </div>
+        
+        <div class="legend-box">
+            <h3>Diagram Legend & Symbols</h3>
+            <div class="legend-grid">
+                <div>
+                    <div class="legend-item">
+                        <div class="legend-icon color-info"></div>
+                        <div><strong>Rectangle</strong> - Automated Process/Step performed by the script</div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon color-manual"></div>
+                        <div><strong>Dashed Rectangle</strong> - Manual Process requiring user intervention</div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon" style="background-color: white; font-weight: bold;">{ }</div>
+                        <div><strong>Diamond</strong> - Decision Point with conditional branching</div>
+                    </div>
+                </div>
+                <div>
+                    <div class="legend-item">
+                        <div class="legend-icon color-success"></div>
+                        <div><strong>Dark Green</strong> - Success/Completion state</div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon color-warning"></div>
+                        <div><strong>Dark Yellow</strong> - Warning/Conditional path</div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon color-error"></div>
+                        <div><strong>Dark Red</strong> - Error/Exit condition</div>
+                    </div>
+                </div>
+                <div>
+                    <div class="legend-item">
+                        <div class="legend-icon" style="background-color: white; font-weight: bold;">Script:</div>
+                        <div><strong>Script:</strong> - Prefix for automated steps performed by Python script</div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon" style="background-color: white; font-weight: bold;">Manual:</div>
+                        <div><strong>Manual:</strong> - Prefix for steps requiring manual user intervention</div>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-icon" style="background-color: white; font-size: 12px;">--&gt;|Label|</div>
+                        <div><strong>--&gt;|Label|</strong> - Conditional flow based on decision</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="legend-box">
+            <h3>Hash Distinctions & Usage</h3>
+            <table class="hash-distinction-table">
+                <thead>
+                    <tr>
+                        <th>Hash Type</th>
+                        <th>Calculation Method</th>
+                        <th>Purpose</th>
+                        <th>Used In</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>File-Level Hash</strong></td>
+                        <td>SHA256 of entire binary file content</td>
+                        <td>Detect if file has changed since last processing</td>
+                        <td><strong>ALL modes</strong> (INSERT, SMART AUDIT, CANCEL & REPLACE)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Row-Level Hash</strong></td>
+                        <td>SHA256 of individual row data (excluding system columns)</td>
+                        <td>Identify duplicate rows or new rows</td>
+                        <td>INSERT mode (duplicate detection)<br>SMART AUDIT mode (new row detection)</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="info-box">
+                <strong>Note:</strong> File-level hash checking happens <strong>BEFORE</strong> any mode-specific processing. 
+                If a file is unchanged (based on binary hash), it's skipped entirely regardless of mode.
+            </div>
+        </div>
+        
+        <h2>Processing Mode Comparison</h2>
+        <div class="mode-comparison">
+            <div class="mode-card">
+                <h4>INSERT Mode</h4>
+                <ul>
+                    <li><strong>File Hash Check:</strong> Yes (all files)</li>
+                    <li><strong>Row Hash Usage:</strong> Duplicate detection against same filename</li>
+                    <li><strong>Duplicate Handling:</strong> Export to duplicates/ folder for manual review</li>
+                    <li><strong>Best For:</strong> Initial data loads, audit trails, compliance</li>
+                    <li><strong>Output:</strong> Complete dataset with duplicates flagged for review</li>
+                </ul>
+            </div>
+            <div class="mode-card">
+                <h4>SMART AUDIT Mode</h4>
+                <ul>
+                    <li><strong>File Hash Check:</strong> Yes (all files)</li>
+                    <li><strong>Row Hash Usage:</strong> New row detection against ALL table rows</li>
+                    <li><strong>Duplicate Handling:</strong> Silently skip duplicates, insert only new rows</li>
+                    <li><strong>Best For:</strong> Daily incremental updates, change detection</li>
+                    <li><strong>Output:</strong> Only new/changed rows inserted</li>
+                </ul>
+            </div>
+            <div class="mode-card">
+                <h4>CANCEL & REPLACE Mode</h4>
+                <ul>
+                    <li><strong>File Hash Check:</strong> Yes (all files)</li>
+                    <li><strong>Row Hash Usage:</strong> Not used</li>
+                    <li><strong>Duplicate Handling:</strong> Delete all existing rows for filename, insert all new rows</li>
+                    <li><strong>Best For:</strong> Full file replacements, data corrections</li>
+                    <li><strong>Output:</strong> Complete replacement of data for that filename</li>
+                </ul>
+            </div>
+        </div>
+        
+        <h2>Processing Flow Details</h2>
+        <ul class="step-list">
+            <li><strong>Standard INSERT Mode:</strong> File Hash Check → Load → Validate → Row Hash Duplicate Detection → Export Duplicates → Insert</li>
+            <li><strong>SMART AUDIT Mode:</strong> File Hash Check → Row Hash Comparison (against ALL table rows) → Insert Only New Rows → Skip Duplicates</li>
+            <li><strong>CANCEL & REPLACE Mode:</strong> File Hash Check → Delete Existing → Load New → Insert All</li>
+            <li><strong>File Hash Check (ALL modes):</strong> Uses per-rule HybridProgressTracker to skip unchanged files</li>
+            <li><strong>Error Recovery:</strong> Failed Rows → Export to failed_rows/ → Manual Correction → Reprocess</li>
+        </ul>
+        
+        <h2>Directory Structure</h2>
+        <div class="directory-structure">
+            <div class="directory-tree">
+                <div class="folder">├── <span>rules/</span> (Rule configuration files)</div>
+                <div class="folder">│   ├── <span>*_rule.yaml</span> (Processing rule definitions)</div>
+                <div class="folder">│   └── <span>*_mapping.csv</span> (Column mapping configurations)</div>
+                <div class="folder">├── <span>inputs/</span> (Source data files - user created)</div>
+                <div class="folder">│   ├── <span>sales_data/</span> (Example: For sales rule)</div>
+                <div class="folder">│   └── <span>inventory_data/</span> (Example: For inventory rule)</div>
+                <div class="folder">├── <span>duplicates/</span> (Duplicate row management)</div>
+                <div class="folder">│   ├── <span>to_process/</span> (Duplicates for manual review)</div>
+                <div class="folder">│   └── <span>processed/</span> (Reviewed duplicates)</div>
+                <div class="folder">├── <span>format_conflict/</span> (Data type validation issues)</div>
+                <div class="folder">│   ├── <span>to_process/</span> (Format conflicts for correction)</div>
+                <div class="folder">│   └── <span>processed/</span> (Corrected format conflicts)</div>
+                <div class="folder">├── <span>failed_rows/</span> (Database insertion failures)</div>
+                <div class="folder">│   ├── <span>to_process/</span> (Failed rows for reprocessing)</div>
+                <div class="folder">│   └── <span>processed/</span> (Reprocessed failed rows)</div>
+                <div class="folder">└── <span>logs/</span> (Processing logs with timestamps)</div>
+            </div>
+        </div>
+        
+        <h2>Configuration Files</h2>
+        <table class="parameter-table">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Location</th>
+                    <th>Purpose</th>
+                    <th>Required</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>global_loader_config.yaml</code></td>
+                    <td>Root directory</td>
+                    <td>Global settings (database, logging, processing options)</td>
+                    <td>Yes</td>
+                </tr>
+                <tr>
+                    <td><code>*_rule.yaml</code></td>
+                    <td><code>rules/</code> directory</td>
+                    <td>Rule-specific processing parameters (file patterns, modes, etc.)</td>
+                    <td>Yes (per rule)</td>
+                </tr>
+                <tr>
+                    <td><code>*_mapping.csv</code></td>
+                    <td><code>rules/</code> directory</td>
+                    <td>Column mappings, data types, and indexing instructions</td>
+                    <td>Yes (per rule)</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div class="info-box">
+            <strong>Note:</strong> All directories except <code>inputs/</code> are automatically created by the script. 
+            The <code>inputs/</code> directory structure should be created by the user based on the rule configurations.
+        </div>
+    </div>
+    
+    <script>
+        // Reinitialize Mermaid for any dynamically added diagrams
+        if (window.mermaid) {
+            mermaid.init();
+        }
+    </script>
+</body>
+</html>
