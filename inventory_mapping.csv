@@ -1,9 +1,0 @@
-RawColumn,TargetColumn,DataType,LoadFlag,IndexColumn,data_source,definition,order
-ItemID,itemid,INTEGER,Y,Y,file,,0
-ItemName,itemname,TEXT,Y,N,file,,1
-Stock,stock,INTEGER,Y,N,file,,2
-_source_sheet,_source_sheet,TEXT,Y,N,file,,3
-loaded_timestamp,loaded_timestamp,TIMESTAMP,Y,N,system,,4
-source_filename,source_filename,TEXT,Y,N,system,,5
-content_hash,content_hash,TEXT,Y,N,system,,6
-operation,operation,TEXT,Y,N,system,,7
