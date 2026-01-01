@@ -1,2 +1,0 @@
-# Extract file pattern
-python loader_script.py --extract-pattern "sales_20230101.csv"
