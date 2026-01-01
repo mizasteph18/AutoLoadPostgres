@@ -1,37 +1,52 @@
-# Database Connection
+# PostgreSQL Data Loader - Global Configuration
+# =============================================
+
+# Database Connection Settings
 dbname: "your_database_name"
 user: "your_username"
 password: "your_password"
 host: "localhost"
 port: 5432
 
-# Processing Settings
+# Processing Performance Settings
 batch_size: 1000
+chunk_size: 100
 max_connections: 5
 min_connections: 1
 retry_attempts: 3
+max_retry_delay: 30
 
-# Features
+# Progress and Tracking
 enable_progress_tracking: true
-enable_data_validation: true
 timestamp_tolerance_seconds: 1.0
-global_hash_exclude_columns: []
 lock_timeout: 3600
-auto_add_columns: true
 
-# File Handling
-delete_files: "N"
-
-# Empty Sheet Handling
+# File Processing Settings
 skip_empty_sheets: true
 warn_on_empty_sheets: true
 treat_empty_as_error: false
+delete_files: "N"
 
-# Enhanced Insertion Settings
+# Column Management
+auto_add_columns: true
+global_hash_exclude_columns: []
+enable_data_validation: true
+
+# Enhanced Error Handling
 enable_row_level_recovery: true
 fail_on_partial_insert: false
 retry_on_deadlock: true
-max_retry_delay: 30
 enable_batch_validation: true
-chunk_size: 100
 max_chunk_failures: 5
+
+# File Generation Control
+generate_sample_files: false
+
+# Logging Configuration
+log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+# Modes Explanation:
+# -----------------
+# insert: Standard mode with duplicate detection and export
+# smart_audit: Hash-based deduplication without duplicate exports
+# cancel_and_replace: Delete and replace, but only if file changed
