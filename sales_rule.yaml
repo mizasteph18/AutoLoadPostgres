@@ -4,8 +4,16 @@ file_pattern: "sales_\\d{8}\\.csv"
 date_format: "%Y%m%d"
 start_row: 0
 start_col: 0
-mode: "insert"
+mode: "insert"  # Options: insert, smart_audit, cancel_and_replace
 date_from_filename_col_name: "file_date"
 hash_exclude_columns: []
 search_subdirectories: true
+skip_subdirectories: 
+  - "processed"
+  - "archive"
+  - "temp"
+skip_file_patterns:
+  - ".*test.*"
+  - ".*backup.*"
 mapping_file: "rules/sales_mapping.csv"
+sheet_config: {}  # For Excel files only
