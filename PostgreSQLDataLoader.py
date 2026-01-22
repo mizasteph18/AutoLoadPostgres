@@ -3534,3 +3534,4 @@ if __name__ == "__main__":
         # Ensure cleanup happens even if there's an unhandled exception
         if loader:
             loader.cleanup()
+            
