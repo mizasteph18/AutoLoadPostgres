@@ -74,7 +74,8 @@ METADATA_COLUMNS = {
 # ===========================
 def setup_logging(log_level: str = "INFO"):
     """Setup logging with configurable log level from global config."""
-    global LOG_DIR
+    # Declare logger as global inside the function
+    global logger
     
     # Convert string log level to logging constant
     level_mapping = {
@@ -94,8 +95,10 @@ def setup_logging(log_level: str = "INFO"):
         print(f"\033[37mLog directory created/verified: {LOG_DIR}\033[0m")
     except OSError as e:
         print(f"\033[31mCRITICAL: Failed to create log directory {LOG_DIR}: {e}\033[0m")
-        LOG_DIR = "."
-        print(f"\033[33mUsing fallback log directory: {LOG_DIR}\033[0m")
+        # Use a safe fallback for LOG_DIR variable
+        fallback_log_dir = "."
+        print(f"\033[33mUsing fallback log directory: {fallback_log_dir}\033[0m")
+        LOG_DIR = fallback_log_dir
     
     # Generate log filename with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -218,7 +221,8 @@ def setup_logging(log_level: str = "INFO"):
     logger.info(f"Logging initialized at level {log_level}. Log file: {log_filepath}")
     return logger
 
-# Initialize logging with default level first
+# Initialize logging with default level first - MOVED AFTER FUNCTION DEFINITION
+# Now we call setup_logging() after it's defined
 logger = setup_logging()
 
 # Enhanced OS error logging decorator - FIXED: Use local logger
@@ -715,7 +719,7 @@ class DatabaseManager:
         Supports: N (no index), PK (primary key), IS (simple index), IU (unique index), IC_* (composite index)
         """
         try:
-            with self.db_manager.get_connection() as conn:
+            with self.get_connection() as conn:
                 with conn.cursor() as cursor:
                     
                     # 1. Process Primary Keys (PK)
@@ -1519,6 +1523,7 @@ class PostgresLoader:
         self.config.delete_files = delete_files.upper()
         
         # REINITIALIZE LOGGING WITH CONFIG LEVEL
+        # Use global declaration before calling setup_logging
         global logger
         logger = setup_logging(log_level=self.config.log_level)
         logger.info(f"Logging reinitialized with level: {self.config.log_level}")
@@ -3181,7 +3186,7 @@ class PostgresLoader:
 
         for fc in all_potential_file_contexts:
             # Special processing files always get processed
-            if any([fc.is_duplicate, getattr(fc, 'is_format_conflict', False), getattr(fc, 'is_failed_row', False)]):
+            if any([fc.is_duplicate, getattr(fc, 'is_format_conflict', False), fc.is_failed_row]):
                 files_to_process.append(fc)
                 logger.debug(f"Including {fc.filename} (special processing file)")
                 continue
@@ -3534,4 +3539,3 @@ if __name__ == "__main__":
         # Ensure cleanup happens even if there's an unhandled exception
         if loader:
             loader.cleanup()
-            
