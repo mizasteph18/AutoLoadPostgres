@@ -1,0 +1,445 @@
+Parfait Azim — je te prépare une vraie “demande de développement”, comme si tu la transmettais à une équipe Data/BI/Dev interne.
+Elle est précise, exhaustive, actionnable, sans ambiguïté, et directement exploitable par un développeur ou une équipe technique.
+
+Elle décrit exactement l’architecture que tu as validée, sans interprétation.
+
+---
+
+🟦 DEMANDE DE DÉVELOPPEMENT — VERSION FINALE
+
+🎯 Objectif général
+
+Développer un système permettant à chaque fichier Excel d’être totalement autonome pour :
+
+• exécuter ses propres requêtes SQL,
+• afficher ses propres données,
+• déclencher automatiquement un rafraîchissement lorsque certaines tables SQL sont rechargées,
+• afficher pour chaque table la COBDATE métier (si elle existe) et la timestamp technique de chargement,
+• détecter si une table statique est trop ancienne,
+• fonctionner sans orchestrateur externe, sans fichier parent, sans JSON.
+
+
+Le système repose sur Excel + Python + PostgreSQL.
+
+---
+
+🟦 1. Structure Excel à implémenter
+
+1.1. Onglet CONFIG
+
+Chaque ligne décrit un bloc du dashboard :
+
+Colonne	Description	
+id	identifiant du bloc	
+sheet	feuille cible	
+range	cellule ou plage d’écriture	
+sql	requête SQL paramétrée (@param)	
+layout_function	fonction Python de rendu (graphique/table)	
+
+
+---
+
+1.2. Onglet PARAMS
+
+Liste des paramètres dynamiques utilisés dans les SQL :
+
+param	value	
+
+
+---
+
+1.3. Onglet TRIGGER_TABLES
+
+Cet onglet doit contenir toutes les tables SQL utilisées par le dashboard, qu’elles soient statiques ou dynamiques.
+
+Colonnes obligatoires :
+
+Colonne	Description	
+table_name	nom de la table métier dans PostgreSQL	
+trigger_flag	Y = déclenche un refresh automatique ; N = ne déclenche pas	
+last_seen_load_ts	timestamp technique vu lors du dernier refresh	
+last_load_ts	timestamp technique réel récupéré depuis SQL	
+cobdate	COBDATE métier récupérée depuis la table métier (si elle existe)	
+
+
+Notes importantes :
+
+• Même les tables statiques doivent apparaître.
+• Même les tables statiques doivent afficher leur COBDATE.
+• Seules les tables avec trigger_flag = 'Y' déclenchent un refresh.
+
+
+---
+
+🟦 2. Structure SQL à respecter
+
+2.1. Table de load (technique)
+
+La table de load ne contient pas la COBDATE.
+
+load_status(
+  table_name TEXT,
+  file_hash TEXT,
+  last_load_ts TIMESTAMP
+)
+
+
+2.2. Table métier (exemple : sales)
+
+La COBDATE métier est dans la table métier, sous forme texte.
+
+sales(
+  file_hash TEXT,
+  cobdate_txt TEXT,   -- ex: '2025-12-31'
+  … autres colonnes …
+)
+
+
+Le lien entre load_status et la table métier se fait via file_hash.
+
+---
+
+🟦 3. Requête SQL générique à implémenter
+
+Pour chaque table listée dans TRIGGER_TABLES :
+
+SELECT 
+    l.last_load_ts,
+    MAX(m.cobdate_txt) AS cobdate_txt
+FROM load_status l
+LEFT JOIN {table_name} m 
+       ON m.file_hash = l.file_hash
+WHERE l.table_name = '{table_name}'
+GROUP BY l.last_load_ts;
+
+
+• last_load_ts = timestamp technique réel
+• cobdate_txt = COBDATE métier (texte)
+• MAX() récupère la COBDATE la plus récente
+
+
+Python doit convertir cobdate_txt en date si possible.
+
+---
+
+🟦 4. Logique Python à développer
+
+4.1. Lecture de TRIGGER_TABLES
+
+Pour chaque ligne :
+
+1. Lire table_name, trigger_flag, last_seen_load_ts.
+2. Exécuter la requête SQL générique.
+3. Mettre à jour dans Excel :• last_load_ts
+• cobdate
+
+
+
+4.2. Déclenchement du refresh automatique
+
+Un refresh doit être déclenché si :
+
+• trigger_flag = 'Y'
+• ET last_load_ts > last_seen_load_ts
+
+
+4.3. Après un refresh complet
+
+Mettre à jour :
+
+last_seen_load_ts = last_load_ts
+
+
+---
+
+🟦 5. Fonctionnalités attendues
+
+Le système doit permettre :
+
+✔ Affichage pour chaque table :
+
+• COBDATE métier (si elle existe)
+• timestamp technique réelle (last_load_ts)
+• dernière timestamp vue par Excel (last_seen_load_ts)
+
+
+✔ Déclenchement automatique du refresh :
+
+• uniquement pour les tables avec trigger_flag = 'Y'
+
+
+✔ Détection des tables statiques trop anciennes :
+
+• via la colonne COBDATE affichée dans Excel
+
+
+✔ Autonomie complète de chaque Excel :
+
+• aucune dépendance externe
+• aucune configuration centralisée
+• aucune table parent
+• aucune orchestration externe
+
+
+---
+
+🟦 6. Livrables attendus
+
+1. Modèle Excel complet• CONFIG
+• PARAMS
+• TRIGGER_TABLES
+• zones d’affichage COBDATE
+• dashboard final
+
+2. Code Python• lecture des onglets Excel
+• exécution des SQL
+• récupération last_load_ts + cobdate_txt
+• mise à jour TRIGGER_TABLES
+• logique de refresh automatique
+• mise à jour last_seen_load_ts
+• exécution des layouts
+
+3. Requêtes SQL• requête générique pour récupérer timestamp + COBDATE
+• requêtes des blocs CONFIG
+
+4. Documentation technique• fonctionnement du moteur
+• structure des onglets
+• logique de refresh
+• conventions SQL
+
+
+
+---
+
+🟦 Si tu veux, je peux aussi te générer :
+
+• un diagramme d’architecture
+• un cahier de tests
+• un backlog Jira
+• un schéma de base de données
+• un exemple complet de fichier Excel
+
+
+Tu veux lequel ensuite ?Parfait Azim — je te prépare une vraie “demande de développement”, comme si tu la transmettais à une équipe Data/BI/Dev interne.
+Elle est précise, exhaustive, actionnable, sans ambiguïté, et directement exploitable par un développeur ou une équipe technique.
+
+Elle décrit exactement l’architecture que tu as validée, sans interprétation.
+
+---
+
+🟦 DEMANDE DE DÉVELOPPEMENT — VERSION FINALE
+
+🎯 Objectif général
+
+Développer un système permettant à chaque fichier Excel d’être totalement autonome pour :
+
+• exécuter ses propres requêtes SQL,
+• afficher ses propres données,
+• déclencher automatiquement un rafraîchissement lorsque certaines tables SQL sont rechargées,
+• afficher pour chaque table la COBDATE métier (si elle existe) et la timestamp technique de chargement,
+• détecter si une table statique est trop ancienne,
+• fonctionner sans orchestrateur externe, sans fichier parent, sans JSON.
+
+
+Le système repose sur Excel + Python + PostgreSQL.
+
+---
+
+🟦 1. Structure Excel à implémenter
+
+1.1. Onglet CONFIG
+
+Chaque ligne décrit un bloc du dashboard :
+
+Colonne	Description	
+id	identifiant du bloc	
+sheet	feuille cible	
+range	cellule ou plage d’écriture	
+sql	requête SQL paramétrée (@param)	
+layout_function	fonction Python de rendu (graphique/table)	
+
+
+---
+
+1.2. Onglet PARAMS
+
+Liste des paramètres dynamiques utilisés dans les SQL :
+
+param	value	
+
+
+---
+
+1.3. Onglet TRIGGER_TABLES
+
+Cet onglet doit contenir toutes les tables SQL utilisées par le dashboard, qu’elles soient statiques ou dynamiques.
+
+Colonnes obligatoires :
+
+Colonne	Description	
+table_name	nom de la table métier dans PostgreSQL	
+trigger_flag	Y = déclenche un refresh automatique ; N = ne déclenche pas	
+last_seen_load_ts	timestamp technique vu lors du dernier refresh	
+last_load_ts	timestamp technique réel récupéré depuis SQL	
+cobdate	COBDATE métier récupérée depuis la table métier (si elle existe)	
+
+
+Notes importantes :
+
+• Même les tables statiques doivent apparaître.
+• Même les tables statiques doivent afficher leur COBDATE.
+• Seules les tables avec trigger_flag = 'Y' déclenchent un refresh.
+
+
+---
+
+🟦 2. Structure SQL à respecter
+
+2.1. Table de load (technique)
+
+La table de load ne contient pas la COBDATE.
+
+load_status(
+  table_name TEXT,
+  file_hash TEXT,
+  last_load_ts TIMESTAMP
+)
+
+
+2.2. Table métier (exemple : sales)
+
+La COBDATE métier est dans la table métier, sous forme texte.
+
+sales(
+  file_hash TEXT,
+  cobdate_txt TEXT,   -- ex: '2025-12-31'
+  … autres colonnes …
+)
+
+
+Le lien entre load_status et la table métier se fait via file_hash.
+
+---
+
+🟦 3. Requête SQL générique à implémenter
+
+Pour chaque table listée dans TRIGGER_TABLES :
+
+SELECT 
+    l.last_load_ts,
+    MAX(m.cobdate_txt) AS cobdate_txt
+FROM load_status l
+LEFT JOIN {table_name} m 
+       ON m.file_hash = l.file_hash
+WHERE l.table_name = '{table_name}'
+GROUP BY l.last_load_ts;
+
+
+• last_load_ts = timestamp technique réel
+• cobdate_txt = COBDATE métier (texte)
+• MAX() récupère la COBDATE la plus récente
+
+
+Python doit convertir cobdate_txt en date si possible.
+
+---
+
+🟦 4. Logique Python à développer
+
+4.1. Lecture de TRIGGER_TABLES
+
+Pour chaque ligne :
+
+1. Lire table_name, trigger_flag, last_seen_load_ts.
+2. Exécuter la requête SQL générique.
+3. Mettre à jour dans Excel :• last_load_ts
+• cobdate
+
+
+
+4.2. Déclenchement du refresh automatique
+
+Un refresh doit être déclenché si :
+
+• trigger_flag = 'Y'
+• ET last_load_ts > last_seen_load_ts
+
+
+4.3. Après un refresh complet
+
+Mettre à jour :
+
+last_seen_load_ts = last_load_ts
+
+
+---
+
+🟦 5. Fonctionnalités attendues
+
+Le système doit permettre :
+
+✔ Affichage pour chaque table :
+
+• COBDATE métier (si elle existe)
+• timestamp technique réelle (last_load_ts)
+• dernière timestamp vue par Excel (last_seen_load_ts)
+
+
+✔ Déclenchement automatique du refresh :
+
+• uniquement pour les tables avec trigger_flag = 'Y'
+
+
+✔ Détection des tables statiques trop anciennes :
+
+• via la colonne COBDATE affichée dans Excel
+
+
+✔ Autonomie complète de chaque Excel :
+
+• aucune dépendance externe
+• aucune configuration centralisée
+• aucune table parent
+• aucune orchestration externe
+
+
+---
+
+🟦 6. Livrables attendus
+
+1. Modèle Excel complet• CONFIG
+• PARAMS
+• TRIGGER_TABLES
+• zones d’affichage COBDATE
+• dashboard final
+
+2. Code Python• lecture des onglets Excel
+• exécution des SQL
+• récupération last_load_ts + cobdate_txt
+• mise à jour TRIGGER_TABLES
+• logique de refresh automatique
+• mise à jour last_seen_load_ts
+• exécution des layouts
+
+3. Requêtes SQL• requête générique pour récupérer timestamp + COBDATE
+• requêtes des blocs CONFIG
+
+4. Documentation technique• fonctionnement du moteur
+• structure des onglets
+• logique de refresh
+• conventions SQL
+
+
+
+---
+
+🟦 Si tu veux, je peux aussi te générer :
+
+• un diagramme d’architecture
+• un cahier de tests
+• un backlog Jira
+• un schéma de base de données
+• un exemple complet de fichier Excel
+
+
+Tu veux lequel ensuite ?
